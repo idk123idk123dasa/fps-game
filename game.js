@@ -738,7 +738,7 @@ function buildButterfly() {
         g.userData.shaderMat = mat;
         knifeGroup = g;
         // Knife.obj is Y-aligned; tilt diagonally so it looks held (like karambit)
-        g.rotation.set(0.15, Math.PI, -0.85);
+        g.rotation.set(0.15, 0, -0.85);
         g.position.set(0.20, -0.18, -0.32);
         return g;
     }
@@ -1413,7 +1413,7 @@ function updateWeaponAnimations(dt) {
         if (currentWeapon === 'knife') {
             const isButterfly = equippedKnife.startsWith('b_');
             const BASE_POS = isButterfly ? { x: 0.20, y: -0.18, z: -0.32 } : { x: 0.22, y: -0.22, z: -0.35 };
-            const BASE_ROT = isButterfly ? { x: 0.15, y: Math.PI, z: -0.85 } : { x: 0.15, y: Math.PI, z: -0.75 };
+            const BASE_ROT = isButterfly ? { x: 0.15, y: 0, z: -0.85 } : { x: 0.15, y: Math.PI, z: -0.75 };
             weaponMesh.position.x = BASE_POS.x + 0.05  * (1 - te);
             weaponMesh.position.y = BASE_POS.y - 0.30  * (1 - te);
             weaponMesh.position.z = BASE_POS.z + 0.07  * (1 - te);
