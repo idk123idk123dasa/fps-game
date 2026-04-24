@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 /* ═══════════════════════════════════════════════
    CONSTANTS
@@ -18,9 +19,9 @@ const BOT_HP        = 100;
 const BOT_SPEED     = 3.4;
 const BOT_FIRE_MS   = 720;
 const BOT_DAMAGE    = 10;
-const BOT_RANGE     = 32;
+const BOT_RANGE     = 40;
 const BOT_COUNT     = 5;
-const KILLS_TO_WIN  = 10;
+const KILLS_TO_WIN  = 5;
 const FOV           = 75;
 
 /* ═══════════════════════════════════════════════
@@ -55,8 +56,16 @@ let gameMode     = 'bot'; // 'bot' | 'network'
 let reloading    = false;
 let reloadEnd    = 0;
 let lastShot     = 0;
+let mouseHeld    = false;
 let kills        = 0;
 let deaths       = 0;
+let playerScore  = 0;
+let botScore     = 0;
+let playerGold   = parseInt(localStorage.getItem('fps_gold') || '0');
+let ownedKnives  = JSON.parse(localStorage.getItem('fps_knives') || '["k_plain","b_plain"]');
+let equippedKnife = localStorage.getItem('fps_knife') || 'k_plain';
+let currentUsername = '';
+let noclipMode = false;
 let velY         = 0;
 let onGround     = false;
 let bots         = [];
@@ -82,11 +91,16 @@ document.addEventListener('keydown', e => {
     if (e.code === 'KeyB') { buyMenuOpen ? closeBuyMenu() : openBuyMenu(); return; }
     if (buyMenuOpen) return;
     if (e.code === 'KeyR' && !reloading && ammo < MAG_SIZE && currentWeapon !== 'knife') startReload();
-    if (e.code === 'KeyE') toggleScope();
     if (e.code === 'KeyF') startInspect();
     if (e.code === 'Digit1') switchWeapon('rifle');
     if (e.code === 'Digit2') switchWeapon('pistol');
     if (e.code === 'Digit3') switchWeapon('knife');
+    if (e.code === 'Comma' && currentUsername === 'admin') {
+        noclipMode = !noclipMode;
+        velY = 0;
+        const indicator = document.getElementById('noclip-indicator');
+        if (indicator) indicator.style.display = noclipMode ? 'block' : 'none';
+    }
     e.preventDefault();
 }, { passive: false });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
@@ -123,11 +137,17 @@ function setupPointerLock() {
     });
 
     document.addEventListener('mousedown', e => {
-        if (e.button === 0 && gameRunning && !gameOver) {
+        if (e.button === 0) {
             e.preventDefault();
-            if (gameMode === 'network') tryShootNet(); else tryShoot();
+            mouseHeld = true;
+            // Single-shot weapons fire on click
+            if (gameRunning && !gameOver && currentWeapon !== 'rifle') {
+                if (gameMode === 'network') tryShootNet(); else tryShoot();
+            }
         }
-        if (e.button === 2 && gameRunning) toggleScope();
+    });
+    document.addEventListener('mouseup', e => {
+        if (e.button === 0) mouseHeld = false;
     });
 
     document.addEventListener('contextmenu', e => e.preventDefault());
@@ -139,7 +159,7 @@ function setupPointerLock() {
 function initThree() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.FogExp2(0xabd4ed, 0.015);
+    scene.fog = new THREE.FogExp2(0xabd4ed, 0.006);
 
     camera = new THREE.PerspectiveCamera(FOV, innerWidth / innerHeight, 0.05, 200);
     camera.rotation.order = 'YXZ';
@@ -161,8 +181,8 @@ function initThree() {
     sun.position.set(40, 70, 30);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
-    sun.shadow.camera.top  =  80; sun.shadow.camera.bottom = -80;
+    sun.shadow.camera.left = -100; sun.shadow.camera.right = 100;
+    sun.shadow.camera.top  =  100; sun.shadow.camera.bottom = -100;
     sun.shadow.camera.far  = 300;
     scene.add(sun);
 
@@ -180,12 +200,16 @@ function initThree() {
 ═══════════════════════════════════════════════ */
 const MAT = {
     ground:  new THREE.MeshLambertMaterial({ color: 0xd4c49a }),
-    wall:    new THREE.MeshLambertMaterial({ color: 0xc8b88a }),
-    crate:   new THREE.MeshLambertMaterial({ color: 0x8b6914 }),
+    wall:    new THREE.MeshLambertMaterial({ color: 0xdcc8a0 }),
+    wall2:   new THREE.MeshLambertMaterial({ color: 0xb8a888 }), // darker variant
+    crate:   new THREE.MeshLambertMaterial({ color: 0x9b7a24 }),
     metal:   new THREE.MeshLambertMaterial({ color: 0x6a7a8a }),
-    dark:    new THREE.MeshLambertMaterial({ color: 0x3a3a3a }),
+    dark:    new THREE.MeshLambertMaterial({ color: 0x2a2a2a }),
     red:     new THREE.MeshLambertMaterial({ color: 0x8b2020 }),
     blue:    new THREE.MeshLambertMaterial({ color: 0x203080 }),
+    van:     new THREE.MeshLambertMaterial({ color: 0x3a5a8a }), // Mirage B van blue
+    vanTop:  new THREE.MeshLambertMaterial({ color: 0x2a4a7a }),
+    stone:   new THREE.MeshLambertMaterial({ color: 0xa89878 }), // Palace stone
 };
 
 function box(x, y, z, w, h, d, mat, addCollision = true) {
@@ -207,75 +231,200 @@ function box(x, y, z, w, h, d, mat, addCollision = true) {
 }
 
 function buildMap() {
-    // Ground
-    {
-        const geo = new THREE.PlaneGeometry(120, 120);
-        const m = new THREE.Mesh(geo, MAT.ground);
-        m.rotation.x = -Math.PI / 2;
-        m.receiveShadow = true;
-        scene.add(m);
-    }
+    const geoG = new THREE.PlaneGeometry(300, 300);
+    const gM = new THREE.Mesh(geoG, MAT.ground);
+    gM.rotation.x = -Math.PI / 2;
+    gM.receiveShadow = true;
+    scene.add(gM);
 
-    const W = 50, D = 50; // half-extents of arena
+    // Helper: roof slab (visual, no collision)
+    const roof = (x, z, w, d) => box(x, 4.0, z, w, 0.35, d, MAT.wall2, false);
 
-    // Outer walls (no collision object needed — just block with inside faces)
-    const wallH = 5;
-    // N/S walls
-    box(0,  0,  D, W*2, wallH, 1, MAT.wall);
-    box(0,  0, -D, W*2, wallH, 1, MAT.wall);
-    // E/W walls
-    box( W, 0,  0, 1, wallH, D*2, MAT.wall);
-    box(-W, 0,  0, 1, wallH, D*2, MAT.wall);
+    const WH = 4.0;  // wall height (~2.4x player)
+    const TH = 7.0;  // Palace pillars
 
-    // Floor detail strips
-    box(0, 0, 0, 100, 0.05, 100, MAT.ground, false);
+    // ── OUTER BOUNDARY ──
+    box(  0, 0,  52, 88, WH,  1, MAT.wall2);
+    box(  0, 0, -52, 88, WH,  1, MAT.wall2);
+    box(-44, 0,   0,  1, WH,104, MAT.wall2);
+    box( 44, 0,   0,  1, WH,104, MAT.wall2);
 
-    // ── COVER ──────────────────────────────────────────
-    // Center structure
-    box(0,   0,  0,  6,  2.5, 2, MAT.wall);
-    box(0,   0,  0,  2,  2.5, 6, MAT.wall);
+    // ══════════════════════════════════════════════
+    //  T SPAWN   Z=38→50, X=-20→20
+    //  Exits at Z=38: B(X=-20→-13), Mid(X=-6→9), A(X=13→20)
+    // ══════════════════════════════════════════════
+    box(-11.5, 0, 38,  5, WH, 1, MAT.wall);   // B↔Mid segment
+    box( 13.0, 0, 38,  6, WH, 1, MAT.wall);   // Mid↔A segment
+    box(-20,   0, 44,  1, WH,12, MAT.wall);   // T left wall
+    box( 20,   0, 44,  1, WH,12, MAT.wall);   // T right wall
+    // Sandbag dividers in T spawn
+    box(  0, 0, 45, 12, 0.9, 1, MAT.crate, false);
 
-    // T side (z > 0)
-    box(-12, 0, 20, 2, 2, 6, MAT.crate);
-    box( 12, 0, 20, 2, 2, 6, MAT.crate);
-    box(  0, 0, 28, 6, 1.2, 2, MAT.crate);
-    box( -5, 0, 35, 4, 2.5, 4, MAT.wall);
-    box(  5, 0, 35, 4, 2.5, 4, MAT.wall);
-    box(-20, 0, 30, 2, 2, 2, MAT.crate);
-    box( 20, 0, 30, 2, 2, 2, MAT.crate);
-    box(-15, 0, 40, 6, 3, 1, MAT.wall);
-    box( 15, 0, 40, 6, 3, 1, MAT.wall);
+    // ══════════════════════════════════════════════
+    //  B APARTMENTS  X=-28→-20, Z=4→38  (8 wide, 34 long)
+    //  INDOOR — has ceiling. Window at Z=20-28 east wall.
+    //  Entry from T at north (Z=38, gap in T wall at X=-20→-13)
+    //  Exit south at Z=4 → B Short
+    // ══════════════════════════════════════════════
+    box(-28, 0, 21,  1, WH, 34, MAT.wall);  // west wall (solid)
+    // East wall X=-20: wall below + above window, open Z=20-28
+    box(-20, 0, 12,  1, WH, 16, MAT.wall);  // east wall Z=4-20
+    box(-20, 0, 32,  1, WH, 12, MAT.wall);  // east wall Z=26-38
+    // Window sill (low) — players shoot through into mid
+    box(-20, 1.2, 24,  1, 1.2, 8, MAT.wall);  // sill Z=20-28 at 1.2 height
+    // Above window (upper frame)
+    box(-20, 3.0, 24,  1, 1.0, 8, MAT.wall);  // top frame Z=20-28
+    // South wall of B Apps
+    box(-24, 0,  4,  8, WH,  1, MAT.wall);
+    // CEILING — makes it indoor
+    roof(-24, 21, 8, 34);
 
-    // CT side (z < 0)
-    box(-12, 0, -20, 2, 2, 6, MAT.metal);
-    box( 12, 0, -20, 2, 2, 6, MAT.metal);
-    box(  0, 0, -28, 6, 1.2, 2, MAT.metal);
-    box( -5, 0, -35, 4, 2.5, 4, MAT.wall);
-    box(  5, 0, -35, 4, 2.5, 4, MAT.wall);
-    box(-20, 0, -30, 2, 2, 2, MAT.metal);
-    box( 20, 0, -30, 2, 2, 2, MAT.metal);
-    box(-15, 0, -40, 6, 3, 1, MAT.wall);
-    box( 15, 0, -40, 6, 3, 1, MAT.wall);
+    // ══════════════════════════════════════════════
+    //  B SHORT   X=-28→-14, Z=-4→4  (14 wide, 8 deep)
+    //  Connects B Apps → B Site; also Underpass exit
+    //  Knee-wall at Z=4 (low cover at B site entry)
+    // ══════════════════════════════════════════════
+    box(-14, 0,  0,  1, WH, 8, MAT.wall);   // east wall of B short
+    box(-21, 0, -4, 14, WH, 1, MAT.wall);   // south wall
+    box(-21, 0,  3, 14, 1.3, 1, MAT.wall);  // knee-wall at site entry
 
-    // Mid-field cover
-    box(-22, 0,  8, 1.5, 2, 8, MAT.wall);
-    box( 22, 0,  8, 1.5, 2, 8, MAT.wall);
-    box(-22, 0, -8, 1.5, 2, 8, MAT.wall);
-    box( 22, 0, -8, 1.5, 2, 8, MAT.wall);
+    // ══════════════════════════════════════════════
+    //  B SITE   X=-42→-14, Z=-30→4  (28 wide, 34 deep)
+    //  Open sky area
+    // ══════════════════════════════════════════════
+    box(-28, 0,-30, 28, WH,  1, MAT.wall2); // back wall
+    box(-14, 0,-14,  1, WH, 30, MAT.wall);  // right wall → mid left wall
+    // ── B VAN (the iconic blue van) ──
+    box(-30, 0, -2, 14, 2.4, 5.5, MAT.van);
+    box(-30, 2.4,-2, 14, 0.45, 6.0, MAT.vanTop);
+    box(-30, 0, -5, 12, 2.4, 1.0, MAT.van);  // front face
+    // B crates
+    box(-22, 0,  0, 3.5, 2.0, 3.5, MAT.crate);
+    box(-22, 2.0, 0, 3.0, 0.8, 3.0, MAT.crate);
+    box(-36, 0,-20, 3.5, 2.2, 3.5, MAT.crate);
+    box(-36, 2.2,-20, 3.0, 1.0, 3.0, MAT.crate);
+    box(-26, 0,-18, 3.0, 1.8, 3.0, MAT.crate);
+    box(-32, 0,-22,  4, 0.08, 4, MAT.blue, false); // bomb zone
 
-    // Pillars
-    box(-35, 0,  15, 2, 4, 2, MAT.dark);
-    box( 35, 0,  15, 2, 4, 2, MAT.dark);
-    box(-35, 0, -15, 2, 4, 2, MAT.dark);
-    box( 35, 0, -15, 2, 4, 2, MAT.dark);
+    // ══════════════════════════════════════════════
+    //  MID   X=-14→16, Z=-22→38  (30 wide, 60 deep)
+    //  Open. Contains: mid boxes, Catwalk, Underpass
+    //  Left wall X=-14 = B Site right wall (south of apps)
+    //  T mid entries: B exit at X=-20→-13, Mid at X=-6→9
+    // ══════════════════════════════════════════════
+    box(-14, 0,  0,  1, WH, 44, MAT.wall);  // left wall Z=-22→22
+    box( 16, 0, -2,  1, WH, 48, MAT.wall);  // right wall Z=-22→22
+    box(  1, 0,-22, 30, WH,  1, MAT.wall);  // south wall
 
-    // Raised platforms
-    box(-30, 0, 0, 8, 1, 6, MAT.metal);
-    box( 30, 0, 0, 8, 1, 6, MAT.metal);
+    // Mid boxes (iconic double-stack near T)
+    box( -4, 0, 27, 3.5, 1.6, 3.5, MAT.crate);
+    box( -4, 1.6,27, 3.0, 0.9, 3.0, MAT.crate);
+    box(  3, 0, 25, 2.5, 1.4, 2.5, MAT.crate);
 
-    // Spawn markers
-    box(0, 0,  44, 4, 0.1, 4, MAT.red,  false);
-    box(0, 0, -44, 4, 0.1, 4, MAT.blue, false);
+    // ── CATWALK  X=10→16, Z=4→30, Y=1.2 ──
+    // Narrow elevated walkway on right side of mid.
+    // Players walk up ramp from T mid, walk south, can drop to B Short.
+    box(13, 1.2, 17, 6, 0.25, 26, MAT.wall, false); // platform floor
+    box(10, 1.2, 17, 1, 1.4,  26, MAT.wall);          // left railing
+    colBoxes.push({ minX:10, maxX:16, minY:1.2, maxY:1.55, minZ:4, maxZ:30, mesh:null });
+    // Ramp up (step) to catwalk at north end (from T mid)
+    box(13, 0.6, 33, 6, 0.6, 4, MAT.wall, false);
+    // Catwalk to B Short drop: at south end Z=4, no wall → open drop to B short
+
+    // ── UNDERPASS  (tunnel T-mid → B Short) ──
+    // Corridor X=-6→2, Z=0→18, low ceiling.
+    // Entry: Z=18 (from mid, south of mid boxes)
+    // Exit:  Z=0 → connects to B Short area (B apps south end at Z=4)
+    box(-6,  0, 9,  1, WH, 18, MAT.wall);   // left wall
+    box(-2,  0, 9,  1, WH, 18, MAT.wall);   // right wall
+    box(-2,  0, 0,  4, WH,  1, MAT.wall);   // south wall (connects to B short opening)
+    box(-4,  2.5, 9, 4, 0.4,18, MAT.dark, false); // ceiling (low tunnel feel)
+    // Underpass has NO north wall — opens into mid at Z=18
+
+    // ══════════════════════════════════════════════
+    //  A RAMP   X=16→24, Z=4→38  (8 wide, 34 long)
+    //  Outdoor corridor from T right exit → A Site
+    // ══════════════════════════════════════════════
+    box(24, 0, 21,  1, WH, 34, MAT.wall);  // right wall
+    box(20, 0,  4,  8, WH,  1, MAT.wall);  // south wall
+
+    // ══════════════════════════════════════════════
+    //  A SITE   X=16→42, Z=-28→8  (26 wide, 36 deep)
+    //  Open area with PALACE ARCH + crates
+    // ══════════════════════════════════════════════
+    box(29, 0,-28, 26, WH,  1, MAT.wall2); // back wall
+    box(16, 0,-12,  1, WH, 36, MAT.wall);  // left wall (from mid/ramp)
+
+    // PALACE — full building on A site (players can enter)
+    // Two tall pillars + connecting lintel forming iconic archway
+    box(28, 0,  4,  3, TH, 3, MAT.stone);  // left pillar
+    box(36, 0,  4,  3, TH, 3, MAT.stone);  // right pillar
+    box(32, TH-1.5, 4, 11, 3, 3, MAT.stone, false); // arch top
+    // Palace side walls (players can be inside Palace)
+    box(26, 0,  1.5,  1, WH, 6, MAT.stone); // left side wall
+    box(38, 0,  1.5,  1, WH, 6, MAT.stone); // right side wall
+    box(32, 0, -1,  14, WH, 2, MAT.stone);  // back wall of Palace interior
+    // Palace roof (indoor building)
+    box(32, 4.0, 1.5, 14, 0.35, 6, MAT.stone, false);
+
+    // Ticket booth (goose corner at A site left entry)
+    box(21, 0, -2,  5, WH,  5, MAT.wall2);
+    // CT box (double stack — famous A site cover)
+    box(26, 0,-10,  3.5, 2.3, 3.5, MAT.crate);
+    box(26, 2.3,-10, 3.0, 1.0, 3.0, MAT.crate);
+    // T-side crates
+    box(34, 0,-10,  3.5, 2.0, 5, MAT.crate);
+    box(38, 0,-18,  4, 2.2, 3.5, MAT.crate);
+    box(28, 0,-20,  3, 1.8, 3.5, MAT.crate);
+    // A bomb zone
+    box(30, 0,-20,  5, 0.08, 5, MAT.red, false);
+
+    // ══════════════════════════════════════════════
+    //  SHORT A   X=16→34, Z=-36→-22  (18 wide, 14 deep)
+    //  CT side fast route to A
+    // ══════════════════════════════════════════════
+    box(25, 0,-22, 18, WH,  1, MAT.wall);  // north wall
+    box(25, 0,-38, 18, WH,  1, MAT.wall);  // south wall
+    box(16, 0,-30,  1, WH, 16, MAT.wall);  // west wall
+    box(26, 0,-30,  3, 2.0,  3, MAT.crate);
+
+    // ══════════════════════════════════════════════
+    //  CT SPAWN   X=-10→10, Z=-42→-52  (20 wide, 10 deep)
+    // ══════════════════════════════════════════════
+    box( 0, 0,-42, 22, WH,  1, MAT.wall);  // north wall
+    box(-10, 0,-47,  1, WH,10, MAT.wall);  // left wall
+    box( 10, 0,-47,  1, WH,10, MAT.wall);  // right wall
+    box(-5, 0,-47,  3, 1.5,  3, MAT.crate);
+    box( 5, 0,-47,  3, 1.5,  3, MAT.crate);
+    box( 0, 0,-48,  4, 0.08, 4, MAT.blue, false);
+
+    // CT → Mid connector (narrow corridor X=-4→4, Z=-22→-32)
+    box(-4, 0,-27,  1, WH, 20, MAT.wall);
+    box( 4, 0,-27,  1, WH, 20, MAT.wall);
+
+    // ══════════════════════════════════════════════
+    //  MARKET  X=-14→-26, Z=-40→-28  (INDOOR building)
+    //  Window on north side looks onto B Short / B Site
+    //  Entry east (X=-14, opening at Z=-34)
+    //  Entry south connects to CT area
+    // ══════════════════════════════════════════════
+    // North wall with window onto B site (opening at X=-16→-22)
+    box(-16, 0,-28,  5, WH, 1, MAT.wall);  // north wall east part
+    box(-24, 0,-28,  5, WH, 1, MAT.wall);  // north wall west part
+    // Window: open Z=-28, X=-21→-19 (gap = window into B site)
+    box(-20, 0,-28,  1, 1.2, 1, MAT.wall); // window sill
+    box(-20, 2.8,-28, 1, 1.2, 1, MAT.wall); // window top
+    box(-20, 0,-40, 12, WH,  1, MAT.wall); // south wall
+    box(-14, 0,-34,  1, WH, 12, MAT.wall); // east wall (gap at Z=-34 = door entry from CT)
+    box(-26, 0,-34,  1, WH, 12, MAT.wall); // west wall
+    // Market roof (indoor)
+    roof(-20, -34, 12, 12);
+    // Market interior pillars (characteristic detail)
+    box(-18, 0,-32,  2, WH, 2, MAT.wall2);
+    box(-22, 0,-36,  2, WH, 2, MAT.wall2);
+
+    // T spawn marker
+    box( 0, 0, 44,  3, 0.08, 3, MAT.red, false);
 }
 
 /* ═══════════════════════════════════════════════
@@ -303,40 +452,245 @@ function makePart(parent, x, y, z, w, h, d, mat, rx=0, ry=0, rz=0) {
     return m;
 }
 
+// AKM .obj model — loaded async, cached here
+let _akModelTemplate = null;
+
+const _akMats = [
+    new THREE.MeshPhongMaterial({ color: 0x2e2e2e, specular: 0x888888, shininess: 60, side: THREE.DoubleSide }),
+    new THREE.MeshPhongMaterial({ color: 0x1a1a1a, specular: 0x555555, shininess: 90, side: THREE.DoubleSide }),
+    new THREE.MeshPhongMaterial({ color: 0x6b4020, specular: 0x331a00, shininess: 20, side: THREE.DoubleSide }),
+    new THREE.MeshPhongMaterial({ color: 0x888888, specular: 0xaaaaaa, shininess: 120, side: THREE.DoubleSide }),
+];
+
+// Karambit OBJ: flat in XY plane, Y longest axis (~9.8 units)
+let _karambitTemplate = null;
+function preloadKarambit() {
+    return new Promise(resolve => {
+        new OBJLoader().load('karambit.obj', obj => {
+            const SCALE = 0.020;
+            obj.scale.setScalar(SCALE);
+            obj.position.set(-2.399 * SCALE, -0.463 * SCALE, 0.287 * SCALE);
+            obj.traverse(child => {
+                if (child.isMesh) { child.castShadow = false; child.receiveShadow = false; }
+            });
+            _karambitTemplate = obj;
+            resolve();
+        }, undefined, () => resolve());
+    });
+}
+
+let _butterflyTemplate = null;
+function preloadButterfly() {
+    return new Promise(resolve => {
+        new OBJLoader().load('uploads_files_3426912_knife.obj', obj => {
+            const SCALE = 0.032;
+            obj.scale.setScalar(SCALE);
+            // Knife is Y-aligned: center it so pivot is at Y=0
+            obj.position.set(0, -0.6 * SCALE, 0);
+            obj.traverse(child => {
+                if (child.isMesh) {
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+            });
+            _butterflyTemplate = obj;
+            resolve();
+        }, undefined, () => resolve());
+    });
+}
+
+function _applyButterflyMaterials(obj, bCol) {
+    const c = new THREE.Color(bCol);
+    const bladeMat = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:  { value: 0 },
+            uColor: { value: new THREE.Vector3(c.r, c.g, c.b) },
+        },
+        vertexShader: `
+            varying vec3 vPos;
+            varying vec3 vNorm;
+            void main() {
+                vPos  = position;
+                vNorm = normalize(normalMatrix * normal);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform float uTime;
+            uniform vec3  uColor;
+            varying vec3  vPos;
+            varying vec3  vNorm;
+            void main() {
+                vec3 L    = normalize(vec3(1.2, 1.6, 1.0));
+                float diff = max(dot(vNorm, L), 0.0);
+                vec3 H    = normalize(L + vec3(0.0, 0.0, 1.0));
+                float spec = pow(max(dot(vNorm, H), 0.0), 200.0);
+                float edge = smoothstep(0.1, -0.1, vPos.x);
+                vec3 bladeCol = mix(uColor * 0.50, uColor * 1.30 + vec3(0.15, 0.15, 0.22), edge);
+                float w1 = sin(vPos.y * 0.4 + uTime * 4.5) * 0.5 + 0.5;
+                float w2 = sin(vPos.y * 0.7 - uTime * 2.8 + vPos.x * 3.0) * 0.5 + 0.5;
+                float shimmer = pow(w1 * w2, 6.0) * 1.4;
+                vec3 col = bladeCol * (0.55 + diff * 0.55)
+                         + vec3(spec * 1.1)
+                         + bladeCol * shimmer
+                         + vec3(shimmer * 0.35);
+                gl_FragColor = vec4(clamp(col, 0.0, 1.5), 1.0);
+            }
+        `,
+        side: THREE.DoubleSide,
+    });
+    const handleMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(bCol).multiplyScalar(0.1).addScalar(0.05),
+        metalness: 0.4,
+        roughness: 0.6,
+    });
+    obj.traverse(child => {
+        if (child.isMesh) {
+            if (child.name.toLowerCase().includes('blade')) {
+                child.material = bladeMat;
+            } else {
+                child.material = handleMat;
+            }
+        }
+    });
+    return bladeMat;
+}
+
+function _applyKarambitMaterials(obj, bCol) {
+    const c = new THREE.Color(bCol);
+    const mat = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime:  { value: 0 },
+            uColor: { value: new THREE.Vector3(c.r, c.g, c.b) },
+        },
+        vertexShader: `
+            varying vec3 vPos;
+            varying vec3 vNorm;
+            void main() {
+                vPos  = position;
+                vNorm = normalize(normalMatrix * normal);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform float uTime;
+            uniform vec3  uColor;
+            varying vec3  vPos;
+            varying vec3  vNorm;
+
+            void main() {
+                // Y in model local space: -4.4 (bottom) to 5.4 (tip)
+                // Handle = lower portion, blade = upper
+                float blade = smoothstep(-2.2, -0.2, vPos.y);
+
+                // Handle: matte black
+                vec3 handleCol = vec3(0.055, 0.055, 0.070);
+
+                // Blade: edge brighter+silver, spine darker
+                float edgeFactor = smoothstep(0.04, -0.40, vPos.z);
+                vec3 bladeCol = mix(
+                    uColor * 0.50,
+                    uColor * 1.25 + vec3(0.18, 0.18, 0.22),
+                    edgeFactor
+                );
+
+                vec3 base = mix(handleCol, bladeCol, blade);
+
+                // Lighting (view-space)
+                vec3 L    = normalize(vec3(1.2, 1.6, 1.0));
+                float diff = max(dot(vNorm, L), 0.0);
+                vec3 H    = normalize(L + vec3(0.0, 0.0, 1.0));
+                float spec = pow(max(dot(vNorm, H), 0.0), 200.0) * blade;
+
+                // Animated shimmer on blade
+                float shimmer = 0.0;
+                if (blade > 0.05) {
+                    float w1 = sin(vPos.y * 3.5 - uTime * 4.5) * 0.5 + 0.5;
+                    float w2 = sin(vPos.y * 6.0 + uTime * 2.8 + vPos.x * 4.0) * 0.5 + 0.5;
+                    shimmer  = pow(w1 * w2, 6.0) * blade * 1.4;
+                }
+
+                // Handle grip-line texture
+                float grip = pow(sin(vPos.y * 7.0) * 0.5 + 0.5, 8.0) * (1.0 - blade) * 0.12;
+
+                vec3 col = base * (0.55 + diff * 0.55)
+                         + vec3(spec * 1.1)
+                         + bladeCol * shimmer
+                         + vec3(shimmer * 0.35)
+                         + vec3(grip);
+
+                gl_FragColor = vec4(clamp(col, 0.0, 1.5), 1.0);
+            }
+        `,
+        side: THREE.DoubleSide,
+    });
+    obj.traverse(child => { if (child.isMesh) child.material = mat; });
+    return mat;
+}
+
+function preloadAK() {
+    return new Promise(resolve => {
+        new OBJLoader().load('ak47.obj', obj => {
+            // Model: barrel runs along +X axis, range ~223cm, center at X≈49cm
+            // Center the model around grip area (X≈50cm) then scale to scene units
+            const SCALE = 0.0028;
+            const offsetX = -49.45 * SCALE;
+            const offsetY =  0.43 * SCALE;
+            const offsetZ = -0.98 * SCALE;
+
+            let meshIdx = 0;
+            obj.traverse(child => {
+                if (child.isMesh) {
+                    const name = (child.name || '').toLowerCase();
+                    if (name.includes('wood') || name.includes('stok') || name.includes('grip')) {
+                        child.material = _akMats[2];
+                    } else if (name.includes('sight') || name.includes('chrome')) {
+                        child.material = _akMats[3];
+                    } else {
+                        child.material = meshIdx % 2 === 0 ? _akMats[0] : _akMats[1];
+                    }
+                    meshIdx++;
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+            });
+
+            obj.scale.setScalar(SCALE);
+            obj.position.set(offsetX, offsetY, offsetZ);
+            _akModelTemplate = obj;
+            resolve();
+        }, undefined, () => resolve());
+    });
+}
+
 function buildRifle() {
     const g = new THREE.Group();
-    const p = (x,y,z,w,h,d,mat,rx=0,ry=0,rz=0) => makePart(g,x,y,z,w,h,d,mat,rx,ry,rz);
-    p(0,0,0,           0.055,0.09,0.38,  wMat.black);
-    p(0,-0.025,0.02,   0.05,0.05,0.32,   wMat.metal);
-    p(0,0.025,-0.30,   0.022,0.022,0.28, wMat.dark);
-    p(0,0.025,-0.44,   0.03,0.03,0.04,   wMat.dark);
-    p(0,0.025,-0.465,  0.018,0.028,0.03, wMat.dark);
-    p(0,0.025,-0.465,  0.028,0.018,0.03, wMat.dark);
-    p(0,0.025,-0.485,  0.014,0.014,0.01, wMat.metal);
-    p(0,0.052,0.04,    0.05,0.012,0.22,  wMat.metal);
-    p(0,0.054,0.06,    0.045,0.005,0.18, wMat.grey);
-    p(0,0.042,-0.18,   0.016,0.016,0.20, wMat.dark);
-    p(0,0.01,-0.18,    0.06,0.045,0.20,  wMat.wood);
-    p(0.032,0.025,-0.18,0.012,0.06,0.20, wMat.woodL);
-    p(-0.032,0.025,-0.18,0.012,0.06,0.20,wMat.woodL);
-    p(0,-0.072,0.10,   0.042,0.09,0.055, wMat.black,0.22);
-    p(0,-0.09,0.115,   0.038,0.04,0.038, wMat.black,0.35);
-    p(0,-0.085,0.045,  0.046,0.095,0.075,wMat.black,-0.12);
-    p(0,-0.105,0.055,  0.042,0.04,0.065, wMat.black,-0.25);
-    p(0,-0.068,0.005,  0.044,0.018,0.01, wMat.metal);
-    p(0,-0.005,0.21,   0.048,0.065,0.14, wMat.wood);
-    p(0,-0.018,0.285,  0.044,0.04,0.06,  wMat.wood);
-    p(0,0.018,0.265,   0.042,0.03,0.09,  wMat.wood);
-    p(0,0.004,0.32,    0.045,0.05,0.015, wMat.woodL);
-    p(0.038,0.025,0.05,0.02,0.015,0.025, wMat.metal);
-    p(0.055,0.025,0.05,0.018,0.025,0.022,wMat.grey);
-    p(0,-0.038,0.075,  0.008,0.028,0.012,wMat.dark,0.25);
-    p(0,-0.048,0.068,  0.01,0.008,0.055, wMat.black);
-    p(0,0.062,-0.30,   0.006,0.02,0.006, wMat.metal);
-    p(0,0.062,-0.285,  0.025,0.005,0.01, wMat.metal);
-    p(0,0.062,0.06,    0.025,0.018,0.012,wMat.metal);
-    g.position.set(0.21,-0.21,-0.32);
-    g.rotation.y = 0.04;
+
+    if (_akModelTemplate) {
+        const clone = _akModelTemplate.clone(true);
+        clone.position.copy(_akModelTemplate.position);
+
+        // Barrel runs along +X → rotate Y=+90° so barrel points toward -Z (forward)
+        clone.rotation.set(0, Math.PI / 2, 0);
+
+        g.add(clone);
+        // Position: right side, below crosshair, close to camera
+        g.position.set(0.22, -0.22, -0.35);
+        g.rotation.set(0.04, 0.05, 0.0);
+    } else {
+        // Fallback procedural if model not loaded yet
+        const p = (x,y,z,w,h,d,mat,rx=0,ry=0,rz=0) => makePart(g,x,y,z,w,h,d,mat,rx,ry,rz);
+        p(0,0,0,0.055,0.09,0.38,wMat.black);
+        p(0,-0.025,0.02,0.05,0.05,0.32,wMat.metal);
+        p(0,0.025,-0.30,0.022,0.022,0.28,wMat.dark);
+        p(0,0.052,0.04,0.05,0.012,0.22,wMat.metal);
+        p(0,0.01,-0.18,0.06,0.045,0.20,wMat.wood);
+        p(0,-0.072,0.10,0.042,0.09,0.055,wMat.black,0.22);
+        p(0,-0.085,0.045,0.046,0.095,0.075,wMat.black,-0.12);
+        p(0,-0.005,0.21,0.048,0.065,0.14,wMat.wood);
+        g.position.set(0.21,-0.21,-0.32);
+        g.rotation.y = 0.04;
+    }
     return g;
 }
 
@@ -369,12 +723,59 @@ function buildPistol() {
     return g;
 }
 
-// Butterfly knife — two handles that flip open
 let knifeGroup, knifeBlade, knifeHandle1, knifeHandle2;
-function buildKnife() {
+
+function buildButterfly() {
+    const allSkins = [...KNIFE_SHOP, ...BUTTERFLY_SHOP];
+    const skin = allSkins.find(k => k.id === equippedKnife) || BUTTERFLY_SHOP[0];
+    const bCol = skin.color || 0xb0b8c8;
     const g = new THREE.Group();
 
-    // Blade
+    if (_butterflyTemplate) {
+        const clone = _butterflyTemplate.clone(true);
+        const mat = _applyButterflyMaterials(clone, bCol);
+        g.add(clone);
+        g.userData.shaderMat = mat;
+        knifeGroup = g;
+        // Knife.obj is Y-aligned; tilt diagonally so it looks held (like karambit)
+        g.rotation.set(0.15, Math.PI, -0.85);
+        g.position.set(0.20, -0.18, -0.32);
+        return g;
+    }
+    // Fallback procedural butterfly
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.008, 0.22), wMat.blade);
+    blade.position.z = -0.09;
+    g.add(blade);
+    const h1 = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.13), wMat.handle);
+    h1.position.set(-0.012, 0, 0.065); g.add(h1);
+    const h2 = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.13), wMat.handle);
+    h2.position.set( 0.012, 0, 0.065); g.add(h2);
+    knifeGroup = g;
+    g.position.set(0.20, -0.18, -0.30);
+    return g;
+}
+
+function buildKnife() {
+    const isButterfly = equippedKnife.startsWith('b_');
+    if (isButterfly) return buildButterfly();
+
+    const allSkins = [...KNIFE_SHOP, ...BUTTERFLY_SHOP];
+    const skin = allSkins.find(k => k.id === equippedKnife) || KNIFE_SHOP[0];
+    const bCol = skin.color || 0xb0b8c8;
+    const g = new THREE.Group();
+
+    if (_karambitTemplate) {
+        const clone = _karambitTemplate.clone(true);
+        const mat = _applyKarambitMaterials(clone, bCol);
+        g.add(clone);
+        g.userData.shaderMat = mat;
+        knifeGroup = g;
+        g.position.set(0.22, -0.22, -0.35);
+        g.rotation.set(0.15, Math.PI, -0.75);
+        return g;
+    }
+
+    // Fallback: simple box knife if OBJ not loaded
     knifeBlade = new THREE.Group();
     const bladeMain = new THREE.Mesh(
         new THREE.BoxGeometry(0.012, 0.008, 0.22), wMat.blade);
@@ -423,14 +824,21 @@ function buildKnife() {
     return g;
 }
 
+let _weaponLight = null;
 function buildWeapon() {
     if (weaponMesh) camera.remove(weaponMesh);
+    if (!_weaponLight) {
+        _weaponLight = new THREE.PointLight(0xffffff, 2.5, 1.5);
+        _weaponLight.position.set(0.2, 0.1, -0.3);
+        camera.add(_weaponLight);
+    }
     let g;
     if      (currentWeapon === 'rifle')  g = buildRifle();
     else if (currentWeapon === 'pistol') g = buildPistol();
     else                                  g = buildKnife();
     camera.add(g);
     weaponMesh = g;
+    _drawAnimStart = performance.now();
 }
 
 function switchWeapon(type) {
@@ -440,7 +848,6 @@ function switchWeapon(type) {
     knifeFlipping = false;
     knifeAnim = 0;
     // Exit scope if switching away from rifle
-    if (scopedIn) { scopedIn = false; camera.fov = FOV; camera.updateProjectionMatrix(); }
     buildWeapon();
     updateHUD();
 }
@@ -449,19 +856,22 @@ function switchWeapon(type) {
    BOT SYSTEM
 ═══════════════════════════════════════════════ */
 const BOT_SPAWNS = [
-    { x: -10, z: 22 }, { x: 10, z: 22 }, { x: 0, z: 38 },
-    { x: -18, z: 32 }, { x: 18, z: 32 }, { x: -5, z: 15 },
-    { x: 5,  z: 15  }, { x: -22, z: 28 }, { x: 22, z: 28 },
-    { x: 0, z: 45 }
+    { x:  0, z: -46 }, { x: -5, z: -45 }, { x:  5, z: -45 }, // CT spawn
+    { x: -30, z:  -8 }, { x: -25, z: -15 }, { x: -34, z: -20 }, // B site
+    { x:  28, z:  -8 }, { x:  24, z: -16 }, { x:  35, z: -20 }, // A site
+    { x:  12, z:  14 }, { x: -4,  z:  10 }, // Mid
+    { x:  24, z: -30 }, // Short A
 ];
 
 const T_SPAWNS_POS = [
-    { x: -3, z: 44, ry: Math.PI }, { x: 3, z: 44, ry: Math.PI },
-    { x: 0, z: 42, ry: Math.PI }
+    { x: -8, z: 46, ry: Math.PI }, { x: 0, z: 47, ry: Math.PI },
+    { x:  8, z: 46, ry: Math.PI }, { x:-4, z: 42, ry: Math.PI },
+    { x:  4, z: 42, ry: Math.PI },
 ];
 const CT_SPAWNS_POS = [
-    { x: -3, z: -44, ry: 0 }, { x: 3, z: -44, ry: 0 },
-    { x: 0, z: -42, ry: 0 }
+    { x: -4, z: -44, ry: 0 }, { x:  4, z: -44, ry: 0 },
+    { x:  0, z: -46, ry: 0 }, { x: -3, z: -43, ry: 0 },
+    { x:  3, z: -43, ry: 0 },
 ];
 
 function spawnBot(spawnIndex) {
@@ -546,39 +956,52 @@ function resolveBotCollision(pos) {
         else if (minD === dzF) pos.z -= dzF;
         else                   pos.z += dzB;
     }
-    pos.x = Math.max(-49, Math.min(49, pos.x));
-    pos.z = Math.max(-49, Math.min(49, pos.z));
+    pos.x = Math.max(-43, Math.min(43, pos.x));
+    pos.z = Math.max(-51, Math.min(51, pos.z));
 }
 
-function hasLineOfSight(fromX, fromZ, toPos) {
-    if (!_wallMeshCache) return true;
-    _rayOrigin.set(fromX, 1.4, fromZ);
-    const target = new THREE.Vector3(toPos.x, EYE_HEIGHT, toPos.z);
-    const dir = target.sub(_rayOrigin).normalize();
-    const dist = _rayOrigin.distanceTo(new THREE.Vector3(fromX, 1.4, fromZ)) +
-                 new THREE.Vector3(fromX, 1.4, fromZ).distanceTo(new THREE.Vector3(toPos.x, EYE_HEIGHT, toPos.z));
-    const rc = new THREE.Raycaster(_rayOrigin, dir, 0.1, dist);
-    return rc.intersectObjects(_wallMeshCache).length === 0;
+// 2D XZ segment vs AABB — more reliable than Three.js raycaster for thin walls
+function _segHitsBox(ax, az, bx, bz, box) {
+    if (box.maxY < 0.8) return false; // ignore floor markers / very low objects
+    const dx = bx - ax, dz = bz - az;
+    let tmin = 0, tmax = 1;
+    if (Math.abs(dx) < 1e-9) {
+        if (ax < box.minX || ax > box.maxX) return false;
+    } else {
+        const t1 = (box.minX - ax) / dx, t2 = (box.maxX - ax) / dx;
+        tmin = Math.max(tmin, Math.min(t1, t2));
+        tmax = Math.min(tmax, Math.max(t1, t2));
+        if (tmin > tmax) return false;
+    }
+    if (Math.abs(dz) < 1e-9) {
+        if (az < box.minZ || az > box.maxZ) return false;
+    } else {
+        const t1 = (box.minZ - az) / dz, t2 = (box.maxZ - az) / dz;
+        tmin = Math.max(tmin, Math.min(t1, t2));
+        tmax = Math.min(tmax, Math.max(t1, t2));
+        if (tmin > tmax) return false;
+    }
+    return tmax > 0.01 && tmin < 0.99; // avoid self-hit at endpoints
+}
+
+function hasLineOfSight(fromX, fromZ, toX, toZ) {
+    for (const box of colBoxes) {
+        if (_segHitsBox(fromX, fromZ, toX, toZ, box)) return false;
+    }
+    return true;
 }
 
 function updateBots(dt, now) {
     const ppos = camera.position;
-    // Rebuild wall mesh cache once per frame
-    _wallMeshCache = colBoxes.map(b => b.mesh).filter(Boolean);
 
     bots.forEach(bot => {
         if (bot.dead) return;
-
         _toPlayer.copy(ppos).sub(bot.pos);
         _toPlayer.y = 0;
         const dist = _toPlayer.length();
 
-        // Check line-of-sight to decide state
-        _rayOrigin.set(bot.pos.x, 1.4, bot.pos.z);
-        const targetPt = new THREE.Vector3(ppos.x, EYE_HEIGHT, ppos.z);
-        const losDir = new THREE.Vector3().copy(targetPt).sub(_rayOrigin).normalize();
-        const losRc = new THREE.Raycaster(_rayOrigin, losDir, 0.1, dist);
-        const losBlocked = losRc.intersectObjects(_wallMeshCache).length > 0;
+        // Check line-of-sight via 2D segment-box test (reliable for thin walls)
+        const losBlocked = !hasLineOfSight(bot.pos.x, bot.pos.z, ppos.x, ppos.z);
 
         if (dist < BOT_RANGE && !losBlocked) {
             bot.state = dist < 18 ? 'attack' : 'chase';
@@ -724,24 +1147,25 @@ function killBot(bot) {
     bot.mesh.rotation.z = Math.PI / 2;
     bot.mesh.position.y = -0.4;
     kills++;
+    playerScore++;
     updateHUD();
     updateScore();
 
-    // Award money / mata (cosmetic, no buy menu)
     setTimeout(() => { scene.remove(bot.mesh); }, 4000);
 
-    if (kills >= KILLS_TO_WIN) {
+    if (playerScore >= KILLS_TO_WIN) {
         endRound(true);
         return;
     }
 
-    // Respawn bot after delay
-    const idx = bots.indexOf(bot);
+    // Respawn bot + buy time pentru jucator
     setTimeout(() => {
         if (!gameRunning) return;
-        bots.splice(bots.indexOf(bot), 1);
+        const idx = bots.indexOf(bot);
+        if (idx !== -1) bots.splice(idx, 1);
         spawnBot(Math.floor(Math.random() * BOT_SPAWNS.length));
-    }, 5000);
+    }, 3000);
+
 }
 
 /* ═══════════════════════════════════════════════
@@ -750,6 +1174,7 @@ function killBot(bot) {
 let flashTimeout = null;
 function takeDamage(amount) {
     if (!gameRunning || gameOver) return;
+    if (noclipMode) return;
     playerHP = Math.max(0, playerHP - amount);
     document.body.style.background = 'radial-gradient(circle, rgba(200,0,0,0.35) 0%, transparent 70%)';
     clearTimeout(flashTimeout);
@@ -761,20 +1186,39 @@ function takeDamage(amount) {
 function die() {
     deaths++;
     if (gameMode === 'network') {
-        // In network mode: show death flash, wait for server respawn
         document.body.style.background = 'radial-gradient(circle, rgba(200,0,0,0.6) 0%, transparent 80%)';
         setTimeout(() => { document.body.style.background = ''; }, 800);
         return;
     }
-    gameRunning = false;
+
+    // Bot mode: scor bot++, respawn dupa 3s
+    botScore++;
+    updateScore();
+
     isLocked = false;
     document.exitPointerLock();
-    if ($deathScr) {
-        $deathScr.style.display = 'block';
-        const btn = $deathScr.querySelector('button');
-        if (btn) btn.style.display = 'block';
+    document.body.style.background = 'radial-gradient(circle, rgba(200,0,0,0.7) 0%, transparent 80%)';
+
+    if (botScore >= KILLS_TO_WIN) {
+        document.body.style.background = '';
+        endRound(false);
+        return;
     }
-    if ($hud) $hud.style.display = 'none';
+
+    // Respawn dupa 3 secunde
+    setTimeout(() => {
+        if (!gameRunning) return;
+        document.body.style.background = '';
+        playerHP = 100;
+        ammo = MAG_SIZE;
+        reloading = false;
+        const spawns = selectedTeam === 'T' ? T_SPAWNS_POS : CT_SPAWNS_POS;
+        const sp = spawns[Math.floor(Math.random() * spawns.length)];
+        camera.position.set(sp.x, EYE_HEIGHT, sp.z);
+        camera.rotation.set(0, sp.ry, 0);
+        updateHUD();
+        requestLock();
+    }, 3000);
 }
 
 /* ═══════════════════════════════════════════════
@@ -821,8 +1265,8 @@ function resolveCollisions() {
     }
 
     // World bounds
-    camera.position.x = Math.max(-49, Math.min(49, camera.position.x));
-    camera.position.z = Math.max(-49, Math.min(49, camera.position.z));
+    camera.position.x = Math.max(-43, Math.min(43, camera.position.x));
+    camera.position.z = Math.max(-51, Math.min(51, camera.position.z));
 }
 
 /* ═══════════════════════════════════════════════
@@ -851,6 +1295,16 @@ function updatePlayer(dt) {
     if (len > 0) {
         camera.position.x += (mx / len) * speed * dt;
         camera.position.z += (mz / len) * speed * dt;
+    }
+
+    if (noclipMode) {
+        // Admin noclip: Space = up, Ctrl = down, no gravity/collision
+        const flySpeed = speed * 1.5;
+        if (keys['Space'])        camera.position.y += flySpeed * dt;
+        if (keys['ControlLeft'] || keys['ControlRight']) camera.position.y -= flySpeed * dt;
+        velY = 0;
+        onGround = false;
+        return;
     }
 
     // Jump
@@ -918,12 +1372,15 @@ function toggleScope() {
 ═══════════════════════════════════════════════ */
 const INSPECT_DURATION = 1.8; // seconds
 
+let _knifeInspectStart = -9999;
+let _drawAnimStart     = -9999;
+const DRAW_ANIM_MS     = 420;
+const KNIFE_INSPECT_MS = 1800;
+
 function startInspect() {
     if (inspecting) return;
     if (currentWeapon === 'knife') {
-        // Butterfly flip instead of normal inspect
-        knifeFlipping = true;
-        knifeAnim = 0;
+        _knifeInspectStart = performance.now();
         return;
     }
     inspecting = true;
@@ -944,70 +1401,75 @@ const BFLY_DURATION = 2.0; // seconds for full flip sequence
 function updateWeaponAnimations(dt) {
     if (!weaponMesh) return;
 
-    // ── Butterfly knife idle + flip ──────────────────
-    if (currentWeapon === 'knife') {
-        const now = performance.now() * 0.001;
+    const _now = performance.now();
+    const drawElapsed = _now - _drawAnimStart;
+    const drawing = drawElapsed < DRAW_ANIM_MS;
 
-        if (knifeFlipping) {
-            knifeAnim = Math.min(1, knifeAnim + dt / BFLY_DURATION);
-            const t = knifeAnim;
+    // ── Draw animation (weapon equip) ─────────────────
+    if (drawing) {
+        const t  = drawElapsed / DRAW_ANIM_MS;
+        const te = 1 - Math.pow(1 - t, 3); // ease-out cubic
 
-            /* CS2-style butterfly flip phases:
-               0.00-0.12  safe handle opens  (swings back 180°)
-               0.12-0.30  knife drops/tilts  (wrist toss setup)
-               0.30-0.55  full spin          (group rotates 360° on Z)
-               0.55-0.68  knife returns      (lands back in hand)
-               0.68-0.82  bite handle closes (swings forward 180°)
-               0.82-1.00  settle back to rest
-            */
-
-            // Safe handle (h1): opens from 0 → -π then stays open
-            const h1Open = ease(remap(t, 0.00, 0.12));
-            // Bite handle (h2): opens with delay → closes
-            const h2Open = ease(remap(t, 0.15, 0.30));
-            const h2Close= ease(remap(t, 0.68, 0.82));
-
-            if (knifeHandle1) knifeHandle1.rotation.z = -Math.PI * h1Open;
-            if (knifeHandle2) knifeHandle2.rotation.z =  Math.PI * Math.max(0, h2Open - h2Close);
-
-            // Whole knife group: toss into the air and spin
-            const tossDrop  = ease(remap(t, 0.12, 0.30)); // lift up
-            const spinPhase = ease(remap(t, 0.25, 0.60)); // full rotation
-            const catchDown = ease(remap(t, 0.55, 0.75)); // come back
-
-            const baseX = 0.1, baseY = -0.17, baseZ = -0.22;
-            weaponMesh.position.x = baseX + Math.sin(spinPhase * Math.PI) *  0.06;
-            weaponMesh.position.y = baseY + Math.sin(tossDrop  * Math.PI) *  0.12
-                                          - Math.sin(catchDown * Math.PI) *  0.08;
-            weaponMesh.position.z = baseZ;
-
-            // Spin: two full rotations on X during the toss
-            weaponMesh.rotation.x = 0.1  + spinPhase * Math.PI * 2;
-            // Side tilt during toss
-            weaponMesh.rotation.z = 0.08 + Math.sin(spinPhase * Math.PI) * 0.35;
-
-            // Settle back smoothly after catch
-            const settle = ease(remap(t, 0.80, 1.00));
-            if (settle > 0) {
-                weaponMesh.rotation.x += (0.1  - weaponMesh.rotation.x) * settle * 0.9;
-                weaponMesh.rotation.z += (0.08 - weaponMesh.rotation.z) * settle * 0.9;
-            }
-
-            if (knifeAnim >= 1) {
-                knifeFlipping = false;
-                knifeAnim = 0;
-                if (knifeHandle1) knifeHandle1.rotation.z = 0;
-                if (knifeHandle2) knifeHandle2.rotation.z = 0;
-                weaponMesh.position.set(baseX, baseY, baseZ);
-                weaponMesh.rotation.set(0.1, 0.05, 0.08);
-            }
+        if (currentWeapon === 'knife') {
+            const isButterfly = equippedKnife.startsWith('b_');
+            const BASE_POS = isButterfly ? { x: 0.20, y: -0.18, z: -0.32 } : { x: 0.22, y: -0.22, z: -0.35 };
+            const BASE_ROT = isButterfly ? { x: 0.15, y: Math.PI, z: -0.85 } : { x: 0.15, y: Math.PI, z: -0.75 };
+            weaponMesh.position.x = BASE_POS.x + 0.05  * (1 - te);
+            weaponMesh.position.y = BASE_POS.y - 0.30  * (1 - te);
+            weaponMesh.position.z = BASE_POS.z + 0.07  * (1 - te);
+            weaponMesh.rotation.x = BASE_ROT.x + 0.60  * (1 - te);
+            weaponMesh.rotation.y = BASE_ROT.y - 1.00  * (1 - te);
+            weaponMesh.rotation.z = BASE_ROT.z + 0.30  * (1 - te);
+        } else if (currentWeapon === 'rifle') {
+            weaponMesh.position.x = 0.22  + 0.08  * (1 - te);
+            weaponMesh.position.y = -0.18 - 0.32  * (1 - te);
+            weaponMesh.position.z = -0.35 + 0.12  * (1 - te);
+            weaponMesh.rotation.x =         0.60  * (1 - te);
+            weaponMesh.rotation.y =        -0.20  * (1 - te);
+            weaponMesh.rotation.z =        -0.30  * (1 - te);
         } else {
-            // Idle: subtle pendulum sway
-            const swing = Math.sin(now * 1.4) * 0.018;
-            const bob   = Math.cos(now * 2.1) * 0.005;
-            weaponMesh.rotation.z = 0.08 + swing;
-            weaponMesh.rotation.x = 0.10 + bob;
-            weaponMesh.position.y = -0.17 + Math.sin(now * 1.0) * 0.003;
+            weaponMesh.position.x = 0.19  + 0.07  * (1 - te);
+            weaponMesh.position.y = -0.20 - 0.28  * (1 - te);
+            weaponMesh.position.z = -0.28 + 0.10  * (1 - te);
+            weaponMesh.rotation.x =         0.55  * (1 - te);
+            weaponMesh.rotation.y =        -0.15  * (1 - te);
+            weaponMesh.rotation.z =        -0.25  * (1 - te);
+        }
+        return;
+    }
+
+    // ── Knife idle + inspect (F) ──────────────────
+    if (currentWeapon === 'knife') {
+        const isButterfly = equippedKnife.startsWith('b_');
+        const now    = _now;
+        const nowSec = now * 0.001;
+        const BASE_POS = isButterfly ? { x: 0.20, y: -0.18, z: -0.30 } : { x: 0.22, y: -0.22, z: -0.35 };
+        const BASE_ROT = isButterfly ? { x: Math.PI/2, y: Math.PI, z: -0.4 } : { x: 0.15, y: Math.PI, z: -0.75 };
+
+        const elapsed = now - _knifeInspectStart;
+        const inspecting_knife = elapsed < KNIFE_INSPECT_MS;
+
+        if (inspecting_knife) {
+            const t = elapsed / KNIFE_INSPECT_MS;
+            const lift   = ease(remap(t, 0.05, 0.45));
+            const spin   = ease(remap(t, 0.15, 0.70));
+            const settle = ease(remap(t, 0.72, 1.00));
+            weaponMesh.position.x = BASE_POS.x - lift * 0.08;
+            weaponMesh.position.y = BASE_POS.y + lift * 0.10 - settle * 0.10;
+            weaponMesh.position.z = BASE_POS.z;
+            weaponMesh.rotation.x = BASE_ROT.x + spin * Math.PI * 1.5 - settle * Math.PI * 1.5;
+            weaponMesh.rotation.y = spin * 0.4 - settle * 0.4;
+            weaponMesh.rotation.z = BASE_ROT.z - lift * 0.3 + settle * 0.3;
+        } else {
+            // Idle sway
+            const swing = Math.sin(nowSec * 1.4) * 0.012;
+            const bob   = Math.cos(nowSec * 2.1) * 0.003;
+            weaponMesh.rotation.x = BASE_ROT.x + bob;
+            weaponMesh.rotation.y = BASE_ROT.y;
+            weaponMesh.rotation.z = BASE_ROT.z + swing;
+            weaponMesh.position.x = BASE_POS.x;
+            weaponMesh.position.y = BASE_POS.y + Math.sin(nowSec * 1.0) * 0.003;
+            weaponMesh.position.z = BASE_POS.z;
         }
         return;
     }
@@ -1035,11 +1497,13 @@ function updateWeaponAnimations(dt) {
    ROUND / GAME MANAGEMENT
 ═══════════════════════════════════════════════ */
 function startGame() {
-    kills   = 0;
-    deaths  = 0;
-    playerHP = 100;
+    kills       = 0;
+    deaths      = 0;
+    playerScore = 0;
+    botScore    = 0;
+    playerHP    = 100;
     playerMoney = 800;
-    ammo    = MAG_SIZE;
+    ammo        = MAG_SIZE;
     reloading = false;
     velY    = 0;
     onGround = false;
@@ -1065,23 +1529,39 @@ function startGame() {
     updateScore();
     requestLock();
     clock.start();
+    // Apasa B pentru buy menu
 }
 
 function endRound(won) {
     gameRunning = false;
     gameOver    = true;
     isLocked    = false;
+    closeBuyMenu();
     document.exitPointerLock();
+
+    // Acorda gold
+    const goldEarned = won ? 10 : 5;
+    playerGold += goldEarned;
+    localStorage.setItem('fps_gold', playerGold);
+    updateGoldDisplay();
+    saveProfileToServer();
+
+    if ($hud) $hud.style.display = 'none';
 
     if (won) {
         if ($winScreen) {
             $winScreen.style.display = 'block';
+            const h = $winScreen.querySelector('h1');
+            if (h) h.innerHTML = `YOU WIN<br><span style="font-size:36px;color:#ffd700;text-shadow:0 0 20px #ffd700;">+${goldEarned} GOLD</span>`;
             setTimeout(() => returnToLobby(), 4000);
         }
     } else {
-        if ($gameover) $gameover.style.display = 'flex';
+        if ($gameover) {
+            $gameover.style.display = 'flex';
+            const fs = document.getElementById('final-score');
+            if (fs) fs.textContent = `${playerScore} - ${botScore}  |  +${goldEarned} GOLD`;
+        }
     }
-    if ($hud) $hud.style.display = 'none';
 }
 
 function returnToLobby() {
@@ -1127,7 +1607,13 @@ function updateHUD() {
 
 function updateScore() {
     const el = document.getElementById('top-score-tile');
-    if (el) el.textContent = `${kills} / ${KILLS_TO_WIN}`;
+    if (el) el.textContent = `${playerScore} - ${botScore}`;
+}
+
+function updateGoldDisplay() {
+    document.querySelectorAll('.gold-display').forEach(el => {
+        el.textContent = `${playerGold} GOLD`;
+    });
 }
 
 /* ═══════════════════════════════════════════════
@@ -1141,8 +1627,17 @@ function animate() {
         updatePlayer(dt);
         if (gameMode === 'bot') updateBots(dt, performance.now());
         updateWeaponAnimations(dt);
+        // Auto-fire for rifle
+        if (mouseHeld && isLocked && currentWeapon === 'rifle' && !gameOver) {
+            if (gameMode === 'network') tryShootNet(); else tryShoot();
+        }
     } else {
         clock.getDelta();
+    }
+
+    // Update karambit shimmer time
+    if (weaponMesh && weaponMesh.userData.shaderMat) {
+        weaponMesh.userData.shaderMat.uniforms.uTime.value = performance.now() * 0.001;
     }
 
     renderer.render(scene, camera);
@@ -1201,28 +1696,128 @@ function setupLobbyUI() {
     const lobbyBtn = document.getElementById('return-to-lobby-btn');
     if (lobbyBtn) lobbyBtn.onclick = returnToLobby;
 
-    // Auth modal (login/signup) — basic wiring
-    const loginBtn = document.getElementById('login-signup-btn');
+    // Auth modal
+    const loginBtn  = document.getElementById('login-signup-btn');
     const authModal = document.getElementById('auth-modal');
     const closeAuth = document.getElementById('close-auth');
     if (loginBtn && authModal) loginBtn.onclick = () => authModal.classList.add('active');
     if (closeAuth && authModal) closeAuth.onclick = () => authModal.classList.remove('active');
 
-    const tabLogin  = document.getElementById('tab-login');
-    const tabSignup = document.getElementById('tab-signup');
+    const tabLogin   = document.getElementById('tab-login');
+    const tabSignup  = document.getElementById('tab-signup');
     const loginForm  = document.getElementById('login-form');
     const signupForm = document.getElementById('signup-form');
     if (tabLogin) tabLogin.onclick = () => {
         tabLogin.classList.add('active'); tabSignup?.classList.remove('active');
         loginForm?.classList.add('active'); signupForm?.classList.remove('active');
+        document.getElementById('auth-error').style.display = 'none';
     };
     if (tabSignup) tabSignup.onclick = () => {
         tabSignup.classList.add('active'); tabLogin?.classList.remove('active');
         signupForm?.classList.add('active'); loginForm?.classList.remove('active');
+        document.getElementById('auth-error').style.display = 'none';
     };
 
-    // Reload key hint in instructions
+    // Login form submit
+    loginForm?.addEventListener('submit', async e => {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        await authRequest('/auth/login', { username, password });
+    });
+
+    // Signup form submit
+    signupForm?.addEventListener('submit', async e => {
+        e.preventDefault();
+        const username = document.getElementById('signup-username').value.trim();
+        const password = document.getElementById('signup-password').value;
+        await authRequest('/auth/register', { username, password });
+    });
+
+    // Logout
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) logoutBtn.onclick = () => {
+        localStorage.removeItem('fps_token');
+        localStorage.removeItem('fps_username');
+        location.reload();
+    };
+
+    // Auto-login if token saved
+    const savedToken = localStorage.getItem('fps_token');
+    if (savedToken) loadProfileFromServer(savedToken);
+
     if ($instruct) $instruct.style.display = 'none';
+}
+
+/* ── Auth helpers ── */
+const AUTH_API = 'https://fps-arena-server.v71247932.workers.dev';
+let authToken = localStorage.getItem('fps_token') || null;
+
+function showAuthError(msg) {
+    const el = document.getElementById('auth-error');
+    if (el) { el.textContent = msg; el.style.display = 'block'; }
+}
+
+async function authRequest(endpoint, body) {
+    const el = document.getElementById('auth-error');
+    if (el) el.style.display = 'none';
+    try {
+        const res = await fetch(AUTH_API + endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) { showAuthError(data.error || 'Eroare'); return; }
+        onAuthSuccess(data);
+    } catch { showAuthError('Eroare conexiune server'); }
+}
+
+async function loadProfileFromServer(token) {
+    try {
+        const res = await fetch(AUTH_API + '/auth/me', {
+            headers: { 'Authorization': 'Bearer ' + token },
+        });
+        if (!res.ok) { localStorage.removeItem('fps_token'); return; }
+        const data = await res.json();
+        onAuthSuccess({ ...data, token });
+    } catch {}
+}
+
+function onAuthSuccess(data) {
+    authToken = data.token;
+    currentUsername = data.username;
+    localStorage.setItem('fps_token', data.token);
+    localStorage.setItem('fps_username', data.username);
+
+    // Load player data from server
+    playerGold    = data.gold || 0;
+    ownedKnives   = data.ownedKnives || ['k_plain', 'b_plain'];
+    if (!ownedKnives.includes('b_plain')) ownedKnives.push('b_plain');
+    equippedKnife = data.equippedKnife || 'k_plain';
+    localStorage.setItem('fps_gold',   playerGold);
+    localStorage.setItem('fps_knives', JSON.stringify(ownedKnives));
+    localStorage.setItem('fps_knife',  equippedKnife);
+    updateGoldDisplay();
+
+    // Update UI
+    const authModal = document.getElementById('auth-modal');
+    if (authModal) authModal.classList.remove('active');
+    const nameEl = document.getElementById('player-name');
+    if (nameEl) nameEl.textContent = data.username.toUpperCase();
+    document.querySelector('.user-info').style.display = 'flex';
+    document.getElementById('login-signup-btn').style.display = 'none';
+}
+
+async function saveProfileToServer() {
+    if (!authToken) return;
+    try {
+        fetch(AUTH_API + '/auth/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+            body: JSON.stringify({ gold: playerGold, ownedKnives, equippedKnife }),
+        });
+    } catch {}
 }
 
 /* ═══════════════════════════════════════════════
@@ -1714,6 +2309,9 @@ function _renderBuyCat(cat) {
     );
 }
 
+let _buyTimerInterval = null;
+let _buySecondsLeft = 10;
+
 function openBuyMenu() {
     if (!gameRunning || gameOver) return;
     buyMenuOpen = true;
@@ -1722,10 +2320,29 @@ function openBuyMenu() {
     _renderBuyCat(_buyCat);
     const el = document.getElementById('ingame-buy-menu');
     if (el) el.classList.add('open');
+
+    // 10 second countdown
+    _buySecondsLeft = 10;
+    _updateBuyTimer();
+    clearInterval(_buyTimerInterval);
+    _buyTimerInterval = setInterval(() => {
+        _buySecondsLeft--;
+        _updateBuyTimer();
+        if (_buySecondsLeft <= 0) closeBuyMenu();
+    }, 1000);
+}
+
+function _updateBuyTimer() {
+    const el = document.getElementById('buy-countdown');
+    if (el) {
+        el.textContent = `${_buySecondsLeft}s`;
+        el.style.color = _buySecondsLeft <= 3 ? '#ff4444' : '#fbbf24';
+    }
 }
 
 function closeBuyMenu() {
     buyMenuOpen = false;
+    clearInterval(_buyTimerInterval);
     const el = document.getElementById('ingame-buy-menu');
     if (el) el.classList.remove('open');
     if (gameRunning && !gameOver) setTimeout(() => requestLock(), 80);
@@ -1742,11 +2359,259 @@ function setupBuyMenu() {
 }
 
 /* ═══════════════════════════════════════════════
+   KNIFE SHOP (LOBBY)
+═══════════════════════════════════════════════ */
+const KNIFE_SHOP = [
+    { id: 'k_plain',   name: 'Karambit',                price: 0,   color: 0xb0b8c8, hColor: 0x1a1a2e, desc: 'Gratuit — otel clasic' },
+    { id: 'k_bluegem', name: 'Karambit | Blue Gem',     price: 100, color: 0x0066ff, hColor: 0x001144, desc: 'Blue Gem Factory New' },
+    { id: 'k_fade',    name: 'Karambit | Fade',         price: 100, color: 0xff6600, hColor: 0x660099, desc: 'Full Fade' },
+    { id: 'k_tiger',   name: 'Karambit | Tiger Tooth',  price: 100, color: 0xd4a017, hColor: 0x2a1500, desc: 'Tiger Tooth FN' },
+    { id: 'k_doppler', name: 'Karambit | Doppler',      price: 100, color: 0x880011, hColor: 0x111111, desc: 'Phase 2' },
+    { id: 'k_marble',  name: 'Karambit | Marble Fade',  price: 100, color: 0xff4400, hColor: 0x001188, desc: 'Fire & Ice' },
+    { id: 'k_crimson', name: 'Karambit | Crimson Web',  price: 100, color: 0xaa0000, hColor: 0x330000, desc: 'Minimal Wear' },
+    { id: 'k_gamma',   name: 'Karambit | Gamma Doppler',price: 100, color: 0x00aa44, hColor: 0x001a0a, desc: 'Emerald' },
+];
+
+const BUTTERFLY_SHOP = [
+    { id: 'b_plain',   name: 'Butterfly',                price: 0,   color: 0xb0b8c8, hColor: 0x1a1a2e, desc: 'Gratuit — otel clasic' },
+    { id: 'b_bluegem', name: 'Butterfly | Blue Gem',     price: 100, color: 0x0066ff, hColor: 0x001144, desc: 'Blue Gem Factory New' },
+    { id: 'b_fade',    name: 'Butterfly | Fade',         price: 100, color: 0xff6600, hColor: 0x660099, desc: 'Full Fade' },
+    { id: 'b_tiger',   name: 'Butterfly | Tiger Tooth',  price: 100, color: 0xd4a017, hColor: 0x2a1500, desc: 'Tiger Tooth FN' },
+    { id: 'b_doppler', name: 'Butterfly | Doppler',      price: 100, color: 0x880011, hColor: 0x111111, desc: 'Phase 2' },
+    { id: 'b_marble',  name: 'Butterfly | Marble Fade',  price: 100, color: 0xff4400, hColor: 0x001188, desc: 'Fire & Ice' },
+    { id: 'b_crimson', name: 'Butterfly | Crimson Web',  price: 100, color: 0xaa0000, hColor: 0x330000, desc: 'Minimal Wear' },
+    { id: 'b_gamma',   name: 'Butterfly | Gamma Doppler',price: 100, color: 0x00aa44, hColor: 0x001a0a, desc: 'Emerald' },
+];
+
+let shopKnifeTab = 'karambit'; // 'karambit' | 'butterfly'
+
+/* ── Knife 3D preview renderer ── */
+let _pvR = null, _pvScene = null, _pvCam = null;
+const _thumbCache = {};
+
+function _initPvRenderer() {
+    _pvScene = new THREE.Scene();
+    _pvScene.background = new THREE.Color(0x0a0f1a);
+    // Camera mimics first-person hand view: slightly left, above, looking at knife
+    _pvCam = new THREE.PerspectiveCamera(50, 1, 0.001, 20);
+    _pvCam.position.set(-0.05, 0.06, 0.32);
+    _pvCam.lookAt(0.04, -0.04, 0);
+    _pvScene.add(new THREE.AmbientLight(0x223355, 1.2));
+    const dl = new THREE.DirectionalLight(0xffffff, 4.5);
+    dl.position.set(0.5, 1.5, 1.5); _pvScene.add(dl);
+    const dl2 = new THREE.DirectionalLight(0x6699ff, 1.5);
+    dl2.position.set(-1.5, -0.5, 0.5); _pvScene.add(dl2);
+    _pvR = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    _pvR.setSize(200, 200);
+}
+
+function _knifeThumb(id) {
+    if (_thumbCache[id]) return _thumbCache[id];
+    if (!_pvR) _initPvRenderer();
+    while (_pvScene.children.length > 3) _pvScene.remove(_pvScene.children[3]);
+    if (id.startsWith('b_')) {
+        _pvScene.add(_buildButterfly3D(id));
+    } else {
+        _pvScene.add(_buildKnife3D(id));
+    }
+    _pvR.render(_pvScene, _pvCam);
+    _thumbCache[id] = _pvR.domElement.toDataURL();
+    return _thumbCache[id];
+}
+
+/* ── Karambit model for shop preview ── */
+function _buildKnife3D(id) {
+    const skin = KNIFE_SHOP.find(k => k.id === id) || KNIFE_SHOP[0];
+    const bCol = skin.color  || 0xb0b8c8;
+    const hCol = skin.hColor || 0x1a1a2e;
+    const g = new THREE.Group();
+
+    // Use real OBJ if loaded
+    if (_karambitTemplate) {
+        const clone = _karambitTemplate.clone(true);
+        _applyKarambitMaterials(clone, bCol);
+        clone.rotation.set(0.15, Math.PI, -0.75);
+        g.add(clone);
+        return g;
+    }
+
+    const B  = new THREE.MeshPhongMaterial({ color: bCol, specular: 0xffffff, shininess: 180, side: THREE.DoubleSide });
+    const B2 = new THREE.MeshPhongMaterial({ color: new THREE.Color(bCol).multiplyScalar(0.55), specular: 0xaaaaaa, shininess: 80, side: THREE.DoubleSide });
+    const H  = new THREE.MeshPhongMaterial({ color: hCol, specular: 0x555566, shininess: 50 });
+    const G  = new THREE.MeshPhongMaterial({ color: 0x555566, specular: 0xaaaacc, shininess: 100 });
+
+    // Curved blade — karambit hook
+    const segs = 12;
+    for (let i = 0; i < segs; i++) {
+        const t  = i / (segs - 1);
+        const a  = t * Math.PI * 0.82 - Math.PI * 0.06;
+        const r  = 0.085;
+        const w  = 0.006 + (1 - t) * 0.004;
+        const h  = 0.022 - t * 0.014;
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.022), t < 0.5 ? B : B2);
+        seg.position.set(Math.sin(a) * r - 0.025, 0, -Math.cos(a) * r + 0.005);
+        seg.rotation.y = -a;
+        g.add(seg);
+    }
+    // Spine detail
+    for (let i = 0; i < 4; i++) {
+        const t  = (i + 0.5) / 4;
+        const a  = t * Math.PI * 0.82 - Math.PI * 0.06;
+        const r  = 0.083;
+        const sp = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.003, 0.006), G);
+        sp.position.set(Math.sin(a) * r - 0.025, 0.012, -Math.cos(a) * r + 0.005);
+        sp.rotation.y = -a;
+        g.add(sp);
+    }
+    // Guard / bolster
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.032, 0.012), G);
+    guard.position.set(-0.007, 0, 0.006); g.add(guard);
+    // Handle
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.020, 0.028, 0.076), H);
+    handle.position.set(-0.002, 0, 0.054); g.add(handle);
+    // Handle texture strips
+    for (let i = 0; i < 3; i++) {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.004, 0.004), G);
+        strip.position.set(-0.002, 0.016, 0.022 + i * 0.022); g.add(strip);
+    }
+    // Finger ring
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.006, 10, 20), G);
+    ring.position.set(-0.002, 0, 0.100); ring.rotation.x = Math.PI / 2; g.add(ring);
+    // Pommel
+    const pom = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.010, 0.010, 10), G);
+    pom.position.set(-0.002, 0, 0.090); pom.rotation.x = Math.PI / 2; g.add(pom);
+
+    // "In-hand" angle — blade pointing up-left, ring toward viewer
+    g.rotation.set(-0.35, -0.55, 0.30);
+    g.position.set(0.01, 0.01, 0);
+    return g;
+}
+
+function _buildButterfly3D(id) {
+    const allSkins = [...KNIFE_SHOP, ...BUTTERFLY_SHOP];
+    const skin = allSkins.find(k => k.id === id) || BUTTERFLY_SHOP[0];
+    const bCol = skin.color || 0xb0b8c8;
+    const g = new THREE.Group();
+
+    if (_butterflyTemplate) {
+        const clone = _butterflyTemplate.clone(true);
+        _applyButterflyMaterials(clone, bCol);
+        clone.rotation.set(Math.PI / 2, Math.PI, -0.4);
+        g.add(clone);
+        return g;
+    }
+
+    // Fallback procedural
+    const B = new THREE.MeshPhongMaterial({ color: bCol, specular: 0xffffff, shininess: 180, side: THREE.DoubleSide });
+    const H = new THREE.MeshPhongMaterial({ color: 0x111111, specular: 0x444444, shininess: 40 });
+    const G = new THREE.MeshPhongMaterial({ color: 0x555566, specular: 0xaaaacc, shininess: 100 });
+
+    // Blade
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.008, 0.22), B);
+    blade.position.z = -0.09; g.add(blade);
+    // Handles
+    const h1 = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.14), H);
+    h1.position.set(-0.016, 0, 0.07); g.add(h1);
+    const h2 = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.14), H);
+    h2.position.set( 0.016, 0, 0.07); g.add(h2);
+    // Pins
+    const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.04, 8), G);
+    pin.rotation.z = Math.PI / 2; pin.position.z = 0; g.add(pin);
+
+    g.rotation.set(-0.3, -0.5, 0.2);
+    g.position.set(0.01, 0.01, 0);
+    return g;
+}
+
+function renderKnifeShop() {
+    const grid = document.getElementById('knife-shop-grid');
+    if (!grid) return;
+    updateGoldDisplay();
+
+    const shopList = shopKnifeTab === 'butterfly' ? BUTTERFLY_SHOP : KNIFE_SHOP;
+    const tabHtml = `<div style="display:flex;gap:8px;margin-bottom:14px;grid-column:1/-1;">
+        <button onclick="window._setShopTab('karambit')" style="flex:1;padding:8px 0;border-radius:6px;border:1px solid;font-size:11px;font-weight:800;letter-spacing:2px;cursor:pointer;${shopKnifeTab==='karambit'?'background:rgba(255,215,0,0.15);border-color:#ffd700;color:#ffd700;':'background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.15);color:rgba(255,255,255,0.5);'}">KARAMBIT</button>
+        <button onclick="window._setShopTab('butterfly')" style="flex:1;padding:8px 0;border-radius:6px;border:1px solid;font-size:11px;font-weight:800;letter-spacing:2px;cursor:pointer;${shopKnifeTab==='butterfly'?'background:rgba(255,215,0,0.15);border-color:#ffd700;color:#ffd700;':'background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.15);color:rgba(255,255,255,0.5);'}">BUTTERFLY</button>
+    </div>`;
+
+    grid.innerHTML = tabHtml + shopList.map(k => {
+        const owned    = ownedKnives.includes(k.id);
+        const equipped = equippedKnife === k.id;
+        const canBuy   = !owned && playerGold >= k.price;
+        const thumb    = _knifeThumb(k.id);
+
+        let btnLabel, btnStyle;
+        if (equipped) {
+            btnLabel = 'ECHIPAT ✓';
+            btnStyle = 'background:rgba(0,255,150,0.2);border-color:#00ff96;color:#00ff96;';
+        } else if (owned) {
+            btnLabel = 'ECHIPEAZA';
+            btnStyle = 'background:rgba(0,210,255,0.15);border-color:#00d2ff;color:#00d2ff;';
+        } else if (canBuy) {
+            btnLabel = `CUMPARA — ${k.price} GOLD`;
+            btnStyle = 'background:rgba(255,215,0,0.15);border-color:#ffd700;color:#ffd700;';
+        } else {
+            btnLabel = k.price > 0 ? `${k.price} GOLD` : 'DEFAULT';
+            btnStyle = 'opacity:0.35;cursor:not-allowed;';
+        }
+
+        const border = equipped ? '2px solid rgba(255,215,0,0.7)' : '1px solid rgba(255,255,255,0.08)';
+        const glow   = equipped ? 'box-shadow:0 0 22px rgba(255,215,0,0.25);' : '';
+
+        return `<div style="background:rgba(255,255,255,0.03);border:${border};border-radius:10px;padding:12px 10px;text-align:center;${glow}transition:all 0.2s;">
+            <img src="${thumb}" style="width:100%;border-radius:6px;margin-bottom:8px;display:block;" alt="${k.name}">
+            <div style="font-size:13px;font-weight:800;color:#fff;margin-bottom:3px;">${k.name}</div>
+            <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-bottom:10px;">${k.desc}</div>
+            <button onclick="_knifeAction('${k.id}',${k.price})" ${(!owned && !canBuy)?'disabled':''} style="width:100%;padding:7px 0;border-radius:5px;border:1px solid;font-size:10px;font-weight:800;letter-spacing:1px;cursor:pointer;${btnStyle}">${btnLabel}</button>
+        </div>`;
+    }).join('');
+}
+
+window._setShopTab = function(tab) {
+    shopKnifeTab = tab;
+    renderKnifeShop();
+};
+
+window._knifeAction = function(id, price) {
+    const owned = ownedKnives.includes(id);
+    if (!owned) {
+        if (playerGold < price) return;
+        playerGold -= price;
+        localStorage.setItem('fps_gold', playerGold);
+        ownedKnives.push(id);
+        localStorage.setItem('fps_knives', JSON.stringify(ownedKnives));
+    }
+    equippedKnife = id;
+    localStorage.setItem('fps_knife', id);
+    updateGoldDisplay();
+    saveProfileToServer();
+    renderKnifeShop();
+    if (currentWeapon === 'knife') buildWeapon();
+};
+
+function setupKnifeShop() {
+    const navShop  = document.getElementById('nav-shop');
+    const shopModal = document.getElementById('lobby-shop-modal');
+    const closeShop = document.getElementById('close-shop');
+    if (navShop)    navShop.onclick   = () => { shopModal?.classList.add('active'); renderKnifeShop(); };
+    if (closeShop)  closeShop.onclick = () => shopModal?.classList.remove('active');
+}
+
+/* ═══════════════════════════════════════════════
    ENTRY POINT
 ═══════════════════════════════════════════════ */
 initThree();
 buildMap();
-buildWeapon();
 setupLobbyUI();
 setupBuyMenu();
+setupKnifeShop();
+updateGoldDisplay();
+Promise.all([preloadAK(), preloadKarambit(), preloadButterfly()]).then(() => {
+    buildWeapon();
+    // Refresh shop thumbnails with real OBJ if shop is open
+    if (document.getElementById('knife-shop-grid')?.children.length > 0) {
+        Object.keys(_thumbCache).forEach(k => delete _thumbCache[k]);
+        renderKnifeShop();
+    }
+});
 animate();
