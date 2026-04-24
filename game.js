@@ -66,6 +66,9 @@ let ownedKnives  = JSON.parse(localStorage.getItem('fps_knives') || '["k_plain",
 let equippedKnife = localStorage.getItem('fps_knife') || 'k_plain';
 let currentUsername = '';
 let noclipMode = false;
+let recoilPitch = 0;   // camera X kick accumulated
+let recoilYaw   = 0;   // camera Y kick accumulated
+let recoilShots = 0;   // shots fired in current burst (more shots = more recoil)
 let velY         = 0;
 let onGround     = false;
 let bots         = [];
@@ -124,12 +127,13 @@ function setupPointerLock() {
 
     document.addEventListener('mousemove', e => {
         if (!isLocked) return;
-        // Scale sensitivity by FOV ratio so 180° turn = same mouse distance scoped or not
         const sens = SENSITIVITY * (camera.fov / FOV);
         camera.rotation.y -= e.movementX * sens;
         camera.rotation.x = Math.max(-1.4, Math.min(1.4,
             camera.rotation.x - e.movementY * sens
         ));
+        // Mouse movement resets burst counter (player re-aimed)
+        if (Math.abs(e.movementY) > 2) recoilShots = Math.max(0, recoilShots - 1);
     });
 
     renderer.domElement.addEventListener('click', () => {
@@ -1070,10 +1074,15 @@ function tryShoot() {
     ammo--;
     if (ammo === 0) startReload();
 
-    // Recoil animation
+    // Recoil — camera kick + weapon kick
+    recoilShots++;
+    const recoilMag = Math.min(0.012 + recoilShots * 0.003, 0.030); // builds up, caps
+    recoilPitch -= recoilMag;                                         // kick up
+    recoilYaw   += (Math.random() - 0.5) * recoilMag * 0.6;          // random side
     if (weaponMesh) {
-        weaponMesh.position.z += 0.04;
-        weaponMesh.rotation.x -= 0.06;
+        weaponMesh.position.z += 0.06;
+        weaponMesh.rotation.x -= 0.12;
+        weaponMesh.rotation.z += (Math.random() - 0.5) * 0.04;
     }
 
     camera.getWorldDirection(_shootDir);
@@ -1345,7 +1354,19 @@ function updatePlayer(dt) {
     if (weaponMesh) {
         weaponMesh.position.z  += (-.35 - weaponMesh.position.z)  * 0.18;
         weaponMesh.rotation.x  += (0    - weaponMesh.rotation.x)  * 0.18;
+        weaponMesh.rotation.z  += (0    - weaponMesh.rotation.z)  * 0.18;
     }
+    // Camera recoil apply + recovery
+    if (recoilPitch !== 0 || recoilYaw !== 0) {
+        camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x + recoilPitch));
+        camera.rotation.y += recoilYaw;
+        recoilPitch *= 0.75;
+        recoilYaw   *= 0.75;
+        if (Math.abs(recoilPitch) < 0.0001) recoilPitch = 0;
+        if (Math.abs(recoilYaw)   < 0.0001) recoilYaw   = 0;
+    }
+    // Reset burst counter if not shooting recently
+    if (performance.now() - lastShot > 300) recoilShots = 0;
 
     // Reload
     if (reloading && performance.now() >= reloadEnd) {
