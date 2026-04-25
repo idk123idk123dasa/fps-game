@@ -244,146 +244,121 @@ function buildMap() {
     scene.add(gM);
 
     const WH = 3.8;
-    const TH = 5.8;   // arch pillar height (taller than walls)
     const ceil = (x, z, w, d) => box(x, WH, z, w, 0.4, d, MAT.wall2, false);
 
     // ── OUTER BOUNDARY ──
-    box(  0, 0,  42, 52, WH,  1, MAT.brick);
-    box(  0, 0, -42, 52, WH,  1, MAT.brick);
-    box(-26, 0,   0,  1, WH, 84, MAT.brick);
-    box( 26, 0,   0,  1, WH, 84, MAT.brick);
+    box(  0, 0,  42, 52, WH,  1, MAT.wall);
+    box(  0, 0, -42, 52, WH,  1, MAT.wall);
+    box(-26, 0,   0,  1, WH, 84, MAT.wall);
+    box( 26, 0,   0,  1, WH, 84, MAT.wall);
 
     // ══════════════════════════════════════════════
-    //  WINGMAN INFERNO — T SPAWN
-    //  Z=30→40, X=-22→14
-    //  LEFT exit (X=-22→-10) → APARTMENTS
-    //  RIGHT exit (X=2→14)   → LONG
-    //  Center divider wall at X=-10→2 at Z=30
+    //  WINGMAN MIRAGE — T SPAWN  Z=32→40
+    //  Left  (X<-4) → B Apartments route
+    //  Right (X>4)  → B Short route
     // ══════════════════════════════════════════════
-    box(-4, 0, 30, 12, WH, 1, MAT.brick);    // south center divider (X=-10→2)
-    box(-22, 0, 35, 1, WH,10, MAT.brick);    // left T wall
-    box( 14, 0, 35, 1, WH,10, MAT.brick);    // right T wall
-    box( -4, 0, 37, 4, 0.5, 2, MAT.crate, false); // sandbag
-    box( -4, 0, 37, 2, 0.05, 2, MAT.red, false);  // T marker
+    box(-4, 0, 32, 12, WH, 1, MAT.wall);     // center divider
+    box(-22, 0, 36,  1, WH, 8, MAT.wall);    // left back wall
+    box( 14, 0, 36,  1, WH, 8, MAT.wall);    // right back wall
+    box(-2, 0, 38,  4, 0.5, 2, MAT.crate, false);
+    box(-2, 0, 38,  2, 0.05, 2, MAT.red, false);
 
     // ══════════════════════════════════════════════
-    //  APARTMENTS  (T LEFT route — INDOOR CORRIDOR)
-    //  X=-22→-10, Z=-8→30  (12 wide, 38 long)
-    //  Classic Inferno indoor corridor, orange brick outer wall
+    //  B APARTMENTS  (T left, INDOOR)  X=-22→-10, Z=8→32
+    //  Sandy walled corridor with inner rooms, leads to elevated B Apps
     // ══════════════════════════════════════════════
-    box(-22, 0, 11,  1, WH, 38, MAT.brick);  // outer WEST wall (full orange brick)
-    // Inner east wall at X=-10, with window gap Z=10→18
-    box(-10, 0, 24,  1, WH, 12, MAT.wall);   // east wall north   Z=18→30
-    box(-10, 0,  2,  1, WH, 20, MAT.wall);   // east wall south   Z=-8→12
-    // Window (Z=12→18): sill + top frame only, gap in between
-    box(-10, 0.9, 15,  1, 0.9, 6, MAT.wall); // window sill
-    box(-10, 3.2, 15,  1, 0.6, 6, MAT.wall); // window top frame
-    ceil(-16, 11, 12, 38);                    // CEILING — key indoor feel
+    box(-22, 0, 20,  1, WH, 24, MAT.wall2);  // outer west wall
+    box(-10, 0, 25,  1, WH, 14, MAT.wall);   // east wall upper  Z=18→32
+    box(-10, 0, 11,  1, WH,  6, MAT.wall);   // east wall lower  Z=8→14
+    box(-10, 0.9, 16, 1, 0.9, 4, MAT.wall);  // window sill  Z=14→18
+    box(-10, 3.2, 16, 1, 0.6, 4, MAT.wall);  // window top frame
+    ceil(-16, 20, 12, 24);                   // indoor ceiling
+    // Internal room dividers (Apartments building feel)
+    box(-22, 0, 28,  8, WH, 1, MAT.wall);    // cross wall  (door gap X=-14→-10)
+    box(-22, 0, 19,  6, WH, 1, MAT.wall);    // cross wall  (door gap X=-16→-10)
+    box(-18, 0, 14,  2, 1.4, 2, MAT.crate);
+    box(-14, 0, 24,  2, 1.0, 2, MAT.crate);
+
+    // ── B APPS STAIRS  Z=9→6, climb to Y=1.4 ──
+    box(-16, 0.00, 9, 12, 0.35, 1, MAT.stone);
+    box(-16, 0.35, 8, 12, 0.35, 1, MAT.stone);
+    box(-16, 0.70, 7, 12, 0.35, 1, MAT.stone);
+    box(-16, 1.05, 6, 12, 0.35, 1, MAT.stone);
+
+    // ── B APPS PLATFORM  X=-22→-10, Z=-8→8, Y=1.4 ──
+    // Players reach this from Apartments stairs; drop east/south edge onto B site
+    box(-16, 1.4,  0, 12, 0.3, 16, MAT.stone, false); // floor slab
+    box(-22, 1.4,  0,  1, WH, 16, MAT.wall);           // outer west wall (cont.)
+    box(-16, 1.4,  8, 12, 1.8,  1, MAT.wall);          // north rail (solid, blocks going back)
+    box(-16, 1.4, -8, 12, 1.5,  1, MAT.wall, false);   // south edge visual rail (no collision — drop off)
+    box(-10, 1.4,  0,  1, 0.7, 16, MAT.stone, false);  // east LOW wall — peek cover, no collision (drop to B)
+    colBoxes.push({minX:-22, maxX:-10, minY:1.4, maxY:1.72, minZ:-8, maxZ:8, mesh:null});
+    box(-18, 1.4,  1,  2, 1.0, 2, MAT.crate);
 
     // ══════════════════════════════════════════════
-    //  LONG  (T RIGHT route — OUTDOOR, with ICONIC ARCH)
-    //  X=2→14, Z=-8→30  (12 wide, 38 long)
-    //  THE ARCH at Z=14: two tall stone pillars + crossbeam
+    //  B SHORT  (T right, outdoor)  X=2→14, Z=8→32
+    //  Direct T → B route alongside east wall
     // ══════════════════════════════════════════════
-    box( 2, 0, 11,  1, WH, 38, MAT.wall);    // left (inner) wall
-    box(14, 0, 11,  1, WH, 38, MAT.brick);   // right (outer) orange brick wall
-    // ─── THE ARCH ───
-    // Two massive stone pillars flanking the corridor, players walk under
-    box( 2, 0, 14, 4.0, TH, 4.5, MAT.arch);  // LEFT PILLAR  (X=0→4, flush w/ left wall)
-    box(10, 0, 14, 4.0, TH, 4.5, MAT.arch);  // RIGHT PILLAR (X=8→12, flush w/ right wall)
-    // Arch top: visual crossbeam spanning both pillars
-    box( 6, TH-0.6, 14, 14, 2.2, 4.5, MAT.arch, false);
-    // Long cover box (pre-arch)
-    box( 8, 0, 24, 3, 1.6, 3, MAT.crate);
-    box( 8, 1.6, 24, 2.5, 0.8, 2.5, MAT.crate);
+    box( 2, 0, 20,  1, WH, 24, MAT.wall);
+    box(14, 0, 20,  1, WH, 24, MAT.wall);
+    box( 8, 0, 22,  3, 1.6, 3, MAT.crate);
+    box( 8, 1.6, 22, 2.5, 0.8, 2.5, MAT.crate);
+    box( 8, 0, 14,  2.5, 1.2, 2.5, MAT.crate);
 
     // ══════════════════════════════════════════════
-    //  A SITE  (main bomb area — center of map)
-    //  X=-22→14, Z=-24→-8  (36 wide, 16 deep)
-    //  Both corridors open into it from north (Z=-8)
-    //  Divider wall between entry openings: X=-10→2 at Z=-8
+    //  B SITE  X=-16→12, Z=-10→8
+    //  Both T routes open here from north; CT enters from south
+    //  ICONIC VAN at center
     // ══════════════════════════════════════════════
-    box(-4, 0, -8, 12, WH, 1, MAT.brick);    // north divider between Apt & Long exits
-    box(-22, 0,-16,  1, WH, 16, MAT.brick);  // west wall (continuous from Apt outer)
-    // East wall: SPLIT — south half solid, north half low (Balcony peeks over)
-    box( 14, 0,-20,  1, WH,  4, MAT.brick);  // east wall south  Z=-24→-20 (solid)
-    box( 14, 0,-14,  1, 0.9, 12, MAT.brick); // east wall north  Z=-20→-8  (LOW — Balcony peek)
-    box( -4, 0,-24, 36, WH,  1, MAT.brick);  // south wall
+    // North wall: solid X=-10→2 only (Apartments drops at X=-10, Short continues X=2-14)
+    box(-4, 0,  8, 12, WH, 1, MAT.wall);
+    box(-16, 0,  0,  1, WH, 18, MAT.wall);   // west wall
+    box( 12, 0,  0,  1, WH, 18, MAT.wall);   // east wall
+    // South corners (gap in middle for CT entries)
+    box(-16, 0,-10,  2, WH, 1, MAT.wall);    // SW corner stub
+    box( 10, 0,-10,  4, WH, 1, MAT.wall);    // SE corner stub
     // BOMB ZONE
-    box( -3, 0,-16,  6, 0.05, 6, MAT.red, false);
-    // Cover stacks — classic Inferno A site layout
-    box(-10, 0,-11, 3.5, 2.0, 3.5, MAT.crate);  // close-left (CT corner cover)
-    box(-10, 2.0,-11, 3.0, 0.9, 3.0, MAT.crate);
-    box(  3, 0,-11, 3.0, 1.8, 3.0, MAT.crate);  // center box
-    box( -3, 0,-19, 3.5, 2.2, 3.5, MAT.crate);  // CT-side double stack
-    box( -3, 2.2,-19, 3.0, 0.9, 3.0, MAT.crate);
-    // Decorative overhead beam (visual Inferno detail)
-    box( -5, 3.4,-10, 10, 0.5, 1.2, MAT.wall2, false);
+    box(-1, 0, 0, 6, 0.05, 6, MAT.red, false);
+    // VAN — iconic Mirage B site cover
+    box(-1, 0,  2,  7, 2.2, 3.5, MAT.metal);
+    box(-1, 2.2, 2,  7, 0.5, 3.5, MAT.dark, false);
+    // Bench (T-side of van)
+    box( 5, 0,  5,  2.5, 1.2, 2.5, MAT.crate);
+    // CT-side cover stacks
+    box(-8, 0, -4,  3.5, 2.0, 3.5, MAT.crate);
+    box(-8, 2.0,-4,  3.0, 0.8, 3.0, MAT.crate);
+    box( 6, 0, -5,  3.0, 1.6, 3.0, MAT.crate);
 
     // ══════════════════════════════════════════════
-    //  BALCONY  (CT elevated position, east of A site)
-    //  X=14→24, Z=-20→-8, Y=1.4
-    //  CTs stand here and peek WEST over the low A-site east wall
-    //  Key CS2 feature: recently extended, overlooks A site
+    //  MARKET  (CT left, INDOOR)  X=-16→0, Z=-24→-10
+    //  Sandy indoor room, CT left approach to B site
     // ══════════════════════════════════════════════
-    box(19, 1.4,-14, 10, 0.3, 12, MAT.stone, false); // balcony floor slab
-    box(24, 1.4,-14, 1, 1.8, 12, MAT.stone);           // outer east railing (solid)
-    box(19, 1.4,-20, 10, 1.8, 1, MAT.stone);           // south railing
-    box(19, 1.4, -8, 10, 1.5, 1, MAT.stone);           // north railing
-    box(14, 1.4,-14,  1, 0.7, 12, MAT.stone);          // inner LOW wall (CTs peek over into A)
-    colBoxes.push({minX:14, maxX:24, minY:1.4, maxY:1.72, minZ:-20, maxZ:-8, mesh:null});
-    // Balcony stairs (4 steps × 0.35 from CT side south)
-    box(19, 0,    -21, 10, 0.35, 1, MAT.stone);  // step 1
-    box(19, 0.35, -22, 10, 0.35, 1, MAT.stone);  // step 2
-    box(19, 0.70, -23, 10, 0.35, 1, MAT.stone);  // step 3
-    box(19, 1.05, -24, 10, 0.35, 1, MAT.stone);  // step 4 (top = 1.40)
+    box(-13, 0,-10,  6, WH, 1, MAT.wall);    // north wall partial  X=-16→-10
+    box(-16, 0,-17,  1, WH, 14, MAT.wall);   // west wall (cont. from B site west)
+    box(  0, 0,-17,  1, WH, 14, MAT.wall);   // east wall / Market–Short divider
+    box(-8, 0,-24, 16, WH,  1, MAT.wall);    // south wall
+    ceil(-8, -17, 16, 14);
+    box(-8, 0,-18,  3, 1.5, 3, MAT.crate);
+    box(-2, 0,-14,  2.5, 1.2, 2.5, MAT.crate);
 
     // ══════════════════════════════════════════════
-    //  PIT  (southeast corner of A site)
-    //  Walled area X=6→14, Z=-24→-14  INSIDE A site
-    //  North wall RAISED (CS2 2026 update) — iconic
+    //  CT SHORT  (outdoor right)  X=0→14, Z=-10→-26
+    //  CT fast approach to B site east side
     // ══════════════════════════════════════════════
-    box( 6, 0,-19,  1, WH, 10, MAT.stone);   // west Pit wall (inside A site)
-    box(10, 0,-14, 10, 2.0,  1, MAT.stone);  // RAISED north Pit wall (can't peek in from A)
-    // Pit entry from south (opens to CT side)
-    box( 6, 0,-24,  8, WH,  1, MAT.stone);   // Pit south wall (gap = CT entry)
-    box(10, 0,-24,  3, 0.5, 3, MAT.stone, false); // Pit floor cover
+    box( 0, 0,-18,  1, WH, 16, MAT.wall);    // west wall (same as Market east)
+    box(14, 0,-18,  1, WH, 16, MAT.wall);    // east wall
+    box( 7, 0,-16,  3, 1.5, 3, MAT.crate);
 
     // ══════════════════════════════════════════════
-    //  A SHORT  (CT direct approach — center)
-    //  X=-4→6, Z=-32→-24  (10 wide, 8 long)
-    //  CT fast route from spawn to A site south
+    //  CT SPAWN  X=-12→12, Z=-26→-36
+    //  Left half (X<0) exits to Market; right half (X>0) to CT Short
     // ══════════════════════════════════════════════
-    box(-4, 0,-28,  1, WH,  8, MAT.wall);    // left wall
-    box( 6, 0,-28,  1, WH,  8, MAT.wall);    // right wall
-    box( 1, 0,-32, 10, WH,  1, MAT.wall);    // south wall
-    box( 1, 0,-28, 3, 1.5, 3, MAT.crate);   // Short cover box
-
-    // ══════════════════════════════════════════════
-    //  LIBRARY  (CT defensive indoor room — single entry)
-    //  X=12→22, Z=-36→-24
-    // ══════════════════════════════════════════════
-    // North wall: door opening X=12→14 only (rest is solid)
-    box(18, 0,-24,  8, WH,  1, MAT.wall2);   // north wall east part (X=14→22)
-    box(13, 0,-24,  2, WH,  1, MAT.wall2);   // north wall door frame
-    box(12, 0,-30,  1, WH, 12, MAT.wall2);   // west wall (gap at Z=-24→-26 = door)
-    box(22, 0,-30,  1, WH, 12, MAT.wall2);   // east wall
-    box(17, 0,-36, 10, WH,  1, MAT.wall2);   // south wall
-    ceil(17, -30, 10, 12);                    // indoor roof
-    box(18, 0,-33,  3, 1.8, 3, MAT.crate);   // corner cover
-
-    // ══════════════════════════════════════════════
-    //  CT SPAWN  (Z=-40→-32, X=-6→8)
-    // ══════════════════════════════════════════════
-    box( 1, 0,-32, 16, WH,  1, MAT.wall2);   // north wall (gap at center for Short)
-    box(-6, 0,-36,  1, WH,  8, MAT.wall2);   // left wall
-    box( 8, 0,-36,  1, WH,  8, MAT.wall2);   // right wall
-    box( 1, 0,-38,  3, 0.05, 3, MAT.blue, false); // CT marker
-
-    // CT → Pit/Balcony passage (right side from CT spawn)
-    box(14, 0,-32,  1, WH, 10, MAT.stone);   // passage left wall (connects Library to Balcony stairs)
-    // CT → left approach past Apartments exit
-    box(-10, 0,-24,  1, WH,  8, MAT.wall2);  // passage right wall (west CT approach)
+    box( 0, 0,-36, 24, WH,  1, MAT.wall);    // back wall
+    box(-12, 0,-31,  1, WH, 10, MAT.wall);   // left outer wall
+    box( 12, 0,-31,  1, WH, 10, MAT.wall);   // right outer wall
+    box(  0, 0,-31,  1, WH, 10, MAT.wall);   // center divider  X=0
+    box(-5, 0,-33,  3, 0.05, 3, MAT.blue, false); // CT marker left
+    box( 6, 0,-33,  3, 0.05, 3, MAT.blue, false); // CT marker right
 }
 
 /* ═══════════════════════════════════════════════
@@ -816,30 +791,30 @@ function switchWeapon(type) {
 ═══════════════════════════════════════════════ */
 const BOT_SPAWNS = [
     // CT spawn
-    { x: -2, z: -35 }, { x:  3, z: -35 },
-    // A site
-    { x: -5, z: -13 }, { x:  2, z: -15 }, { x: -9, z: -11 },
-    // Pit area
-    { x:  9, z: -20 }, { x: 10, z: -23 },
-    // Balcony
-    { x: 18, z: -13 }, { x: 17, z: -16 },
-    // Library
-    { x: 17, z: -30 },
-    // T Apartments
-    { x: -16, z: 15 }, { x: -16, z: 24 },
-    // T Long
-    { x:  8, z: 15  }, { x:  8, z: 24  },
+    { x: -5, z: -32 }, { x:  6, z: -32 },
+    // B site
+    { x: -4, z:  0  }, { x:  2, z: -5  }, { x: -9, z:  3  },
+    // Market
+    { x: -8, z: -18 }, { x: -3, z: -20 },
+    // CT Short
+    { x:  7, z: -18 }, { x:  7, z: -22 },
+    // B Apps platform
+    { x:-17, z:  2  }, { x:-18, z: -4  },
+    // Apartments corridor
+    { x:-16, z: 16  }, { x:-16, z: 26  },
+    // B Short corridor
+    { x:  8, z: 16  }, { x:  8, z: 26  },
 ];
 
 const T_SPAWNS_POS = [
-    { x: -8, z: 37, ry: Math.PI }, { x: -4, z: 38, ry: Math.PI },
-    { x:  0, z: 37, ry: Math.PI }, { x:  6, z: 38, ry: Math.PI },
-    { x: 10, z: 37, ry: Math.PI },
+    { x: -14, z: 38, ry: Math.PI }, { x: -8, z: 37, ry: Math.PI },
+    { x:  -2, z: 38, ry: Math.PI }, { x:  6, z: 37, ry: Math.PI },
+    { x:  11, z: 38, ry: Math.PI },
 ];
 const CT_SPAWNS_POS = [
-    { x: -2, z: -35, ry: 0 }, { x:  3, z: -35, ry: 0 },
-    { x:  0, z: -36, ry: 0 }, { x: -4, z: -34, ry: 0 },
-    { x:  4, z: -34, ry: 0 },
+    { x: -7, z: -32, ry: 0 }, { x: -3, z: -31, ry: 0 },
+    { x:  5, z: -32, ry: 0 }, { x:  9, z: -31, ry: 0 },
+    { x:  1, z: -33, ry: 0 },
 ];
 
 function spawnBot(spawnIndex) {
