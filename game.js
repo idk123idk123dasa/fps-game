@@ -239,10 +239,16 @@ function box(x, y, z, w, h, d, mat, addCollision = true) {
 function preloadMap() {
     return new Promise(resolve => {
         const SCALE = 0.022;
-        const matWall  = new THREE.MeshLambertMaterial({ color: 0xd4bc8c });
-        const matFloor = new THREE.MeshLambertMaterial({ color: 0xc8b882 });
+        // Distinct materials so different parts are recognizable without textures
+        const matFloor  = new THREE.MeshLambertMaterial({ color: 0xb8a878 }); // dark sand — floor
+        const matWall   = new THREE.MeshLambertMaterial({ color: 0xe8d4a8 }); // light sand — walls
+        const matWall2  = new THREE.MeshLambertMaterial({ color: 0xd4b880 }); // medium — inner walls
+        const matRoof   = new THREE.MeshLambertMaterial({ color: 0xa89060 }); // dark — ceilings
+        const matProp   = new THREE.MeshLambertMaterial({ color: 0x8a7050 }); // brown — props/trees
+
         new OBJLoader().load('3d-model.obj', obj => {
             obj.scale.setScalar(SCALE);
+            let meshIdx = 0;
             obj.traverse(child => {
                 if (!child.isMesh) return;
                 child.geometry.computeBoundingBox();
@@ -253,11 +259,23 @@ function preloadMap() {
                 const h = mxY - mnY;
                 const w = mxX - mnX;
                 const d = mxZ - mnZ;
-                // Wall: tall enough to block, not a giant terrain slab
-                const isWall = h > 0.5 && mxY > 0.5 && w < 45 && d < 45;
-                child.material = (mnY < 0.1 && h < 0.5) ? matFloor : matWall;
+
+                // Assign material by shape
+                const isFlat = h < 0.3;
+                const isCeil = mnY > 2.5;
+                const isProp = child.parent?.name?.startsWith('trunk');
+                if      (isProp)    child.material = matProp;
+                else if (isFlat && mnY < 0.1) child.material = matFloor;
+                else if (isCeil)    child.material = matRoof;
+                else if (meshIdx % 2 === 0)   child.material = matWall;
+                else                           child.material = matWall2;
+
                 child.castShadow = false;
                 child.receiveShadow = true;
+                meshIdx++;
+
+                // Collision for wall-like objects
+                const isWall = h > 0.5 && mxY > 0.5 && w < 45 && d < 45;
                 if (isWall) colBoxes.push({minX:mnX, maxX:mxX, minY:mnY, maxY:mxY, minZ:mnZ, maxZ:mxZ, mesh:null});
             });
             scene.add(obj);
