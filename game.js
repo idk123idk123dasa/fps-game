@@ -236,6 +236,36 @@ function box(x, y, z, w, h, d, mat, addCollision = true) {
     return mesh;
 }
 
+function preloadMap() {
+    return new Promise(resolve => {
+        const SCALE = 0.022;
+        const matWall  = new THREE.MeshLambertMaterial({ color: 0xd4bc8c });
+        const matFloor = new THREE.MeshLambertMaterial({ color: 0xc8b882 });
+        new OBJLoader().load('3d-model.obj', obj => {
+            obj.scale.setScalar(SCALE);
+            obj.traverse(child => {
+                if (!child.isMesh) return;
+                child.geometry.computeBoundingBox();
+                const bb = child.geometry.boundingBox;
+                const mnX = bb.min.x * SCALE, mxX = bb.max.x * SCALE;
+                const mnY = bb.min.y * SCALE, mxY = bb.max.y * SCALE;
+                const mnZ = bb.min.z * SCALE, mxZ = bb.max.z * SCALE;
+                const h = mxY - mnY;
+                const w = mxX - mnX;
+                const d = mxZ - mnZ;
+                // Wall: tall enough to block, not a giant terrain slab
+                const isWall = h > 0.5 && mxY > 0.5 && w < 45 && d < 45;
+                child.material = (mnY < 0.1 && h < 0.5) ? matFloor : matWall;
+                child.castShadow = false;
+                child.receiveShadow = true;
+                if (isWall) colBoxes.push({minX:mnX, maxX:mxX, minY:mnY, maxY:mxY, minZ:mnZ, maxZ:mxZ, mesh:null});
+            });
+            scene.add(obj);
+            resolve();
+        }, undefined, () => resolve());
+    });
+}
+
 function buildMap() {
     const geoG = new THREE.PlaneGeometry(300, 300);
     const gM = new THREE.Mesh(geoG, MAT.ground);
@@ -790,31 +820,26 @@ function switchWeapon(type) {
    BOT SYSTEM
 ═══════════════════════════════════════════════ */
 const BOT_SPAWNS = [
-    // CT spawn
-    { x: -5, z: -32 }, { x:  6, z: -32 },
-    // B site
-    { x: -4, z:  0  }, { x:  2, z: -5  }, { x: -9, z:  3  },
-    // Market
-    { x: -8, z: -18 }, { x: -3, z: -20 },
-    // CT Short
-    { x:  7, z: -18 }, { x:  7, z: -22 },
-    // B Apps platform
-    { x:-17, z:  2  }, { x:-18, z: -4  },
-    // Apartments corridor
-    { x:-16, z: 16  }, { x:-16, z: 26  },
-    // B Short corridor
-    { x:  8, z: 16  }, { x:  8, z: 26  },
+    // T side (north)
+    { x: -8, z: 24 }, { x: 0, z: 25 }, { x: 8, z: 24 },
+    // Mid map
+    { x: -5, z:  5 }, { x:  2, z:  0 }, { x: -10, z: -2 },
+    { x:  8, z:  5 }, { x: 12, z: -5 },
+    // CT side (south)
+    { x: -5, z:-20 }, { x:  5, z:-22 }, { x:  0, z:-18 },
+    { x:-12, z:-12 }, { x: 12, z:-12 },
+    { x: -8, z:-26 }, { x:  8, z:-26 },
 ];
 
 const T_SPAWNS_POS = [
-    { x: -14, z: 38, ry: Math.PI }, { x: -8, z: 37, ry: Math.PI },
-    { x:  -2, z: 38, ry: Math.PI }, { x:  6, z: 37, ry: Math.PI },
-    { x:  11, z: 38, ry: Math.PI },
+    { x:-10, z: 26, ry: Math.PI }, { x: -4, z: 27, ry: Math.PI },
+    { x:  2, z: 26, ry: Math.PI }, { x:  8, z: 27, ry: Math.PI },
+    { x: 14, z: 26, ry: Math.PI },
 ];
 const CT_SPAWNS_POS = [
-    { x: -7, z: -32, ry: 0 }, { x: -3, z: -31, ry: 0 },
-    { x:  5, z: -32, ry: 0 }, { x:  9, z: -31, ry: 0 },
-    { x:  1, z: -33, ry: 0 },
+    { x: -8, z:-25, ry: 0 }, { x: -3, z:-26, ry: 0 },
+    { x:  3, z:-25, ry: 0 }, { x:  8, z:-26, ry: 0 },
+    { x:  0, z:-27, ry: 0 },
 ];
 
 function spawnBot(spawnIndex) {
@@ -1212,9 +1237,9 @@ function resolveCollisions() {
         else                   camera.position.z += dzB;
     }
 
-    // World bounds
-    camera.position.x = Math.max(-25, Math.min(25, camera.position.x));
-    camera.position.z = Math.max(-41, Math.min(41, camera.position.z));
+    // World bounds (match 3d-model.obj at scale 0.022: X±24.5, Z±28.9)
+    camera.position.x = Math.max(-24, Math.min(24, camera.position.x));
+    camera.position.z = Math.max(-29, Math.min(29, camera.position.z));
 }
 
 /* ═══════════════════════════════════════════════
@@ -2566,7 +2591,7 @@ setupLobbyUI();
 setupBuyMenu();
 setupKnifeShop();
 updateGoldDisplay();
-Promise.all([preloadAK(), preloadKarambit(), preloadButterfly()]).then(() => {
+Promise.all([preloadAK(), preloadKarambit(), preloadButterfly(), preloadMap()]).then(() => {
     buildWeapon();
     // Refresh shop thumbnails with real OBJ if shop is open
     if (document.getElementById('knife-shop-grid')?.children.length > 0) {
